@@ -18,46 +18,44 @@ export default function AgentMonitor() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">
-          <span className="gradient-text">Agent</span> Monitor
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Live agent activity and x402 micropayment history
+        <h1 className="text-2xl font-black tracking-tight">Agent Monitor</h1>
+        <p className="mt-0.5 text-xs text-muted-foreground font-mono uppercase tracking-wider">
+          Live activity · x402 micropayment log
         </p>
       </div>
 
       {/* Agent Status */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-        <Card className="border-border/50 bg-card/50 backdrop-blur">
-          <CardHeader>
-            <CardTitle className="text-sm">Active Agents</CardTitle>
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Active Agents</CardTitle>
           </CardHeader>
           <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-xs">Agent</TableHead>
-                  <TableHead className="text-xs">Role</TableHead>
-                  <TableHead className="text-xs">Last Action</TableHead>
-                  <TableHead className="text-xs">Time</TableHead>
-                  <TableHead className="text-xs">Status</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider">Agent</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider">Role</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider">Last Action</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider">Time</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider">Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {agentActivity.map((a, i) => (
                   <TableRow key={i}>
-                    <TableCell className="font-mono text-xs">{a.agent}</TableCell>
+                    <TableCell className="font-mono text-[10px]">{a.agent}</TableCell>
                     <TableCell>
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground uppercase">
+                      <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 bg-secondary text-secondary-foreground uppercase">
                         {a.role}
                       </span>
                     </TableCell>
-                    <TableCell className="text-xs">{a.lastAction}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{a.time}</TableCell>
+                    <TableCell className="text-[10px]">{a.lastAction}</TableCell>
+                    <TableCell className="text-[10px] text-muted-foreground">{a.time}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1.5">
-                        <div className={`h-1.5 w-1.5 rounded-full ${a.status === "active" ? "bg-primary animate-pulse" : "bg-muted-foreground"}`} />
-                        <span className="text-[10px] font-mono">{a.status}</span>
+                        <div className={`h-1.5 w-1.5 ${a.status === "active" ? "bg-primary" : "bg-muted-foreground"}`} />
+                        <span className="text-[9px] font-mono font-bold uppercase">{a.status}</span>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -69,37 +67,37 @@ export default function AgentMonitor() {
       </motion.div>
 
       {/* x402 Payment Log */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
-        <Card className="border-border/50 bg-card/50 backdrop-blur">
-          <CardHeader>
-            <CardTitle className="text-sm">x402 Micropayment Log</CardTitle>
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }}>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">x402 Micropayment Log</CardTitle>
           </CardHeader>
           <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-xs">ID</TableHead>
-                  <TableHead className="text-xs">Payer → Provider</TableHead>
-                  <TableHead className="text-xs">Amount</TableHead>
-                  <TableHead className="text-xs">Call Hash</TableHead>
-                  <TableHead className="text-xs">Status</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider">ID</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider">Payer → Provider</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider">Amount</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider">Call Hash</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-wider">Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {payments.map((p) => (
                   <TableRow key={p.id}>
-                    <TableCell className="font-mono text-xs text-primary">#{p.id}</TableCell>
-                    <TableCell className="font-mono text-xs">
+                    <TableCell className="font-mono text-[10px] text-primary font-bold">#{p.id}</TableCell>
+                    <TableCell className="font-mono text-[10px]">
                       {shortenAddress(p.payer)} → {shortenAddress(p.provider)}
                     </TableCell>
-                    <TableCell className="font-mono text-xs">
+                    <TableCell className="font-mono text-[10px]">
                       {formatAmount(p.amount, p.token)} {getTokenSymbol(p.token)}
                     </TableCell>
-                    <TableCell className="font-mono text-[10px] text-muted-foreground max-w-[120px] truncate">
+                    <TableCell className="font-mono text-[9px] text-muted-foreground max-w-[120px] truncate">
                       {p.callHash}
                     </TableCell>
                     <TableCell>
-                      <span className={`text-[10px] font-mono font-semibold ${p.settled ? "text-primary" : "text-[hsl(var(--state-funded))]"}`}>
+                      <span className={`text-[9px] font-mono font-black uppercase ${p.settled ? "text-primary" : "text-accent"}`}>
                         {p.settled ? "SETTLED" : "PENDING"}
                       </span>
                     </TableCell>

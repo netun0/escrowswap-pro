@@ -68,24 +68,22 @@ export default function CreateTask() {
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">
-          <span className="gradient-text">Create</span> Task
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Define a job, assign agents, and fund the escrow
+        <h1 className="text-2xl font-black tracking-tight">Create Task</h1>
+        <p className="mt-0.5 text-xs text-muted-foreground font-mono uppercase tracking-wider">
+          Define job · assign agents · fund escrow
         </p>
       </div>
 
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+      <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
         <form onSubmit={handleSubmit}>
-          <Card className="border-border/50 bg-card/50 backdrop-blur">
-            <CardHeader>
-              <CardTitle className="text-lg">Task Specification</CardTitle>
-              <CardDescription>IPFS URI or description of the work</CardDescription>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-bold uppercase tracking-wider">Task Specification</CardTitle>
+              <CardDescription className="text-xs">IPFS URI or description of the work</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="specURI">Spec URI</Label>
+              <div className="space-y-1.5">
+                <Label htmlFor="specURI" className="text-[10px] uppercase tracking-wider">Spec URI</Label>
                 <Textarea
                   id="specURI"
                   placeholder="ipfs://Qm... or https://..."
@@ -98,14 +96,14 @@ export default function CreateTask() {
             </CardContent>
           </Card>
 
-          <Card className="mt-4 border-border/50 bg-card/50 backdrop-blur">
-            <CardHeader>
-              <CardTitle className="text-lg">Agent Assignment</CardTitle>
-              <CardDescription>Assign worker and verifier addresses</CardDescription>
+          <Card className="mt-3">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-bold uppercase tracking-wider">Agent Assignment</CardTitle>
+              <CardDescription className="text-xs">Assign worker and verifier addresses</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="worker">Worker Address</Label>
+              <div className="space-y-1.5">
+                <Label htmlFor="worker" className="text-[10px] uppercase tracking-wider">Worker Address</Label>
                 <Input
                   id="worker"
                   placeholder="0x..."
@@ -115,8 +113,8 @@ export default function CreateTask() {
                   required
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="verifier">Verifier Address</Label>
+              <div className="space-y-1.5">
+                <Label htmlFor="verifier" className="text-[10px] uppercase tracking-wider">Verifier Address</Label>
                 <Input
                   id="verifier"
                   placeholder="0x..."
@@ -129,15 +127,15 @@ export default function CreateTask() {
             </CardContent>
           </Card>
 
-          <Card className="mt-4 border-border/50 bg-card/50 backdrop-blur">
-            <CardHeader>
-              <CardTitle className="text-lg">Payment & Payout</CardTitle>
-              <CardDescription>Configure escrow funding and Uniswap payout routing</CardDescription>
+          <Card className="mt-3">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-bold uppercase tracking-wider">Payment & Payout</CardTitle>
+              <CardDescription className="text-xs">Configure escrow funding and Uniswap payout routing</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Payment Token</Label>
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] uppercase tracking-wider">Payment Token</Label>
                   <Select value={form.paymentToken} onValueChange={(v) => updateField("paymentToken", v)}>
                     <SelectTrigger><SelectValue placeholder="Select token" /></SelectTrigger>
                     <SelectContent>
@@ -152,8 +150,8 @@ export default function CreateTask() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="amount">Amount</Label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="amount" className="text-[10px] uppercase tracking-wider">Amount</Label>
                   <Input
                     id="amount"
                     type="number"
@@ -168,8 +166,8 @@ export default function CreateTask() {
               </div>
 
               <div className="flex items-center gap-3">
-                <div className="flex-1 space-y-2">
-                  <Label>Worker Preferred Token</Label>
+                <div className="flex-1 space-y-1.5">
+                  <Label className="text-[10px] uppercase tracking-wider">Worker Preferred Token</Label>
                   <Select value={form.workerPreferredToken} onValueChange={(v) => updateField("workerPreferredToken", v)}>
                     <SelectTrigger><SelectValue placeholder="Payout token" /></SelectTrigger>
                     <SelectContent>
@@ -188,7 +186,7 @@ export default function CreateTask() {
                   type="button"
                   variant="outline"
                   size="icon"
-                  className="mt-6"
+                  className="mt-5"
                   onClick={fetchQuote}
                   disabled={!form.paymentToken || !form.workerPreferredToken || !form.amount}
                 >
@@ -200,20 +198,20 @@ export default function CreateTask() {
                 <motion.div
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: "auto" }}
-                  className="rounded-lg border border-primary/20 bg-primary/5 p-3"
+                  className="border border-primary/30 bg-primary/5 p-3"
                 >
-                  <p className="text-xs font-semibold text-primary mb-1">Swap Preview (Uniswap V3)</p>
+                  <p className="text-[10px] font-bold text-primary mb-2 uppercase tracking-wider">Swap Preview — Uniswap V3</p>
                   <div className="grid grid-cols-3 gap-2 text-xs font-mono text-muted-foreground">
                     <div>
-                      <span className="text-[10px] uppercase">Output</span>
+                      <span className="text-[9px] uppercase">Output</span>
                       <p className="text-foreground">{quote.amountOut}</p>
                     </div>
                     <div>
-                      <span className="text-[10px] uppercase">Impact</span>
+                      <span className="text-[9px] uppercase">Impact</span>
                       <p className="text-foreground">{quote.priceImpact}%</p>
                     </div>
                     <div>
-                      <span className="text-[10px] uppercase">Fee</span>
+                      <span className="text-[9px] uppercase">Fee</span>
                       <p className="text-foreground">{quote.fee}</p>
                     </div>
                   </div>
@@ -224,7 +222,7 @@ export default function CreateTask() {
 
           <Button
             type="submit"
-            className="mt-6 w-full gradient-primary text-primary-foreground font-semibold"
+            className="mt-4 w-full bg-primary text-primary-foreground font-bold uppercase tracking-wider text-xs h-10"
             disabled={loading}
           >
             {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
