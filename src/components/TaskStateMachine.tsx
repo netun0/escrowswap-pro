@@ -17,7 +17,7 @@ const flowStates: TaskState[] = ["Open", "Funded", "Submitted", "Verified", "Pai
 
 export function TaskStateMachine({ currentState }: { currentState: TaskState }) {
   const currentIdx = flowStates.indexOf(currentState);
-  const isTerminal = currentState === "Refunded" || currentState === "Disputed";
+  const isTerminal = currentState === "Refunded" || currentState === "Disputed" || currentState === "Expired";
 
   return (
     <div className="flex items-center gap-1">
