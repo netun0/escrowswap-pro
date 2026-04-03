@@ -10,13 +10,14 @@ const stateColors: Record<TaskState, string> = {
   PaidOut: "bg-[hsl(var(--state-paidout))]",
   Refunded: "bg-[hsl(var(--state-refunded))]",
   Disputed: "bg-[hsl(var(--state-disputed))]",
+  Expired: "bg-[hsl(var(--state-refunded))]",
 };
 
 const flowStates: TaskState[] = ["Open", "Funded", "Submitted", "Verified", "PaidOut"];
 
 export function TaskStateMachine({ currentState }: { currentState: TaskState }) {
   const currentIdx = flowStates.indexOf(currentState);
-  const isTerminal = currentState === "Refunded" || currentState === "Disputed";
+  const isTerminal = currentState === "Refunded" || currentState === "Disputed" || currentState === "Expired";
 
   return (
     <div className="flex items-center gap-1">

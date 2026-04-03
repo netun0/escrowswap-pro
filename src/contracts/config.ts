@@ -56,6 +56,7 @@ export const TASK_STATES = [
   "PaidOut",
   "Refunded",
   "Disputed",
+  "Expired",
 ] as const;
 
 export type TaskState = (typeof TASK_STATES)[number];
@@ -76,6 +77,12 @@ export interface Task {
   submittedAt: number;
   verifiedAt: number;
   completedAt: number;
+  // User story additions
+  description: string;       // Natural language task description
+  deadline: number;           // Unix timestamp — work must be submitted by this time
+  expiresAt: number;          // Unix timestamp — funds reclaimable after this if no submission
+  maxBudget: number;          // Max budget cap in token units (safety limit)
+  capabilities: string[];     // Tags for worker capability matching
 }
 
 export interface MicroPayment {
@@ -87,4 +94,15 @@ export interface MicroPayment {
   callHash: string;
   timestamp: number;
   settled: boolean;
+  purpose: string;            // Human-readable reason for micropayment
+}
+
+export interface AuditEvent {
+  id: number;
+  taskId: number;
+  action: string;
+  actor: string;
+  timestamp: number;
+  txHash: string;
+  network: "Sepolia" | "Hedera";
 }
