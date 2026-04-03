@@ -3,12 +3,11 @@ import { motion } from "framer-motion";
 import { Card, CardContent } from "@/components/ui/card";
 import { TaskStateMachine } from "@/components/TaskStateMachine";
 import { useEscrow, useX402 } from "@/hooks/useEscrow";
-import { shortenAddress, formatAmount, getTokenSymbol } from "@/contracts/mockData";
-import { ArrowRight } from "lucide-react";
+import { shortenAddress, formatAmount, getTokenSymbol, timeAgo, timeUntil, MOCK_AUDIT_EVENTS } from "@/contracts/mockData";
+import { ArrowRight, Clock, Shield, Zap } from "lucide-react";
 import { TOKENS } from "@/contracts/config";
 
-function formatUSD(wei: number, tokenAddr: string): string {
-  // Convert raw amounts to human-readable with token decimals
+function formatTokenValue(wei: number, tokenAddr: string): string {
   for (const token of Object.values(TOKENS)) {
     if (token.address.toLowerCase() === tokenAddr.toLowerCase()) {
       return (wei / 10 ** token.decimals).toLocaleString("en-US", {
@@ -20,23 +19,19 @@ function formatUSD(wei: number, tokenAddr: string): string {
   return "0";
 }
 
-function timeAgo(ts: number): string {
-  if (ts <= 0) return "—";
-  const diff = Date.now() / 1000 - ts;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
-
 export default function Dashboard() {
   const { tasks } = useEscrow();
   const { payments } = useX402();
 
-  const activeTasks = tasks.filter((t) => !["PaidOut", "Refunded"].includes(t.state));
+  const activeTasks = tasks.filter((t) => !["PaidOut", "Refunded", "Expired"].includes(t.state));
   const completedTasks = tasks.filter((t) => t.state === "PaidOut");
+  const urgentTasks = activeTasks.filter((t) => {
+    const dl = timeUntil(t.deadline);
+    return dl.urgent && t.state !== "Verified";
+  });
 
-  // Calculate total escrowed per token for human display
-  const escrowedByToken: Record<string, { symbol: string; total: number; decimals: number }> = {};
+  // Aggregate locked value per token
+  const escrowedByToken: Record<string, { symbol: string; total: number; color: string }> = {};
   activeTasks.forEach((t) => {
     const sym = getTokenSymbol(t.paymentToken);
     const token = Object.values(TOKENS).find(
@@ -44,12 +39,12 @@ export default function Dashboard() {
     );
     if (!token) return;
     if (!escrowedByToken[sym]) {
-      escrowedByToken[sym] = { symbol: sym, total: 0, decimals: token.decimals };
+      escrowedByToken[sym] = { symbol: sym, total: 0, color: token.logoColor };
     }
     escrowedByToken[sym].total += Number(t.amount) / 10 ** token.decimals;
   });
 
-  const escrowEntries = Object.values(escrowedByToken);
+  const recentAudit = MOCK_AUDIT_EVENTS.slice(-4).reverse();
 
   return (
     <div className="space-y-6">
@@ -62,17 +57,15 @@ export default function Dashboard() {
         </p>
       </div>
 
-      {/* Overview strip */}
-      <div className="grid grid-cols-3 gap-3">
+      {/* Stats */}
+      <div className="grid grid-cols-4 gap-3">
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
           <Card>
             <CardContent className="p-4">
-              <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">In progress</span>
+              <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">Active Jobs</span>
               <div className="mt-1 flex items-baseline gap-2">
                 <span className="text-3xl font-black font-mono text-accent">{activeTasks.length}</span>
-                <span className="text-[10px] text-muted-foreground font-mono">
-                  / {tasks.length} total
-                </span>
+                <span className="text-[10px] text-muted-foreground font-mono">of {tasks.length}</span>
               </div>
             </CardContent>
           </Card>
@@ -81,11 +74,12 @@ export default function Dashboard() {
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}>
           <Card>
             <CardContent className="p-4">
-              <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">Locked value</span>
+              <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">Locked Value</span>
               <div className="mt-1 space-y-0.5">
-                {escrowEntries.length > 0 ? (
-                  escrowEntries.map((e) => (
+                {Object.values(escrowedByToken).length > 0 ? (
+                  Object.values(escrowedByToken).map((e) => (
                     <div key={e.symbol} className="flex items-baseline gap-1.5">
+                      <span className="h-2 w-2 rounded-full inline-block" style={{ backgroundColor: e.color }} />
                       <span className="text-lg font-black font-mono text-foreground">
                         {e.total.toLocaleString("en-US", { maximumFractionDigits: 2 })}
                       </span>
@@ -106,96 +100,154 @@ export default function Dashboard() {
               <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">Completed</span>
               <div className="mt-1 flex items-baseline gap-2">
                 <span className="text-3xl font-black font-mono text-primary">{completedTasks.length}</span>
-                <span className="text-[10px] text-muted-foreground font-mono">
-                  paid out
+                <span className="text-[10px] text-muted-foreground font-mono">paid out</span>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
+          <Card className={urgentTasks.length > 0 ? "border-destructive/40" : ""}>
+            <CardContent className="p-4">
+              <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">Urgent</span>
+              <div className="mt-1 flex items-baseline gap-2">
+                <span className={`text-3xl font-black font-mono ${urgentTasks.length > 0 ? "text-destructive" : "text-muted-foreground"}`}>
+                  {urgentTasks.length}
                 </span>
+                <span className="text-[10px] text-muted-foreground font-mono">near deadline</span>
               </div>
             </CardContent>
           </Card>
         </motion.div>
       </div>
 
-      {/* Task feed */}
+      {/* Job Feed */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">Latest activity</span>
+          <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">Recent Jobs</span>
           <Link to="/tasks" className="text-[10px] text-primary hover:underline flex items-center gap-1 font-mono">
-            All tasks <ArrowRight className="h-2.5 w-2.5" />
+            View all <ArrowRight className="h-2.5 w-2.5" />
           </Link>
         </div>
         <div className="space-y-1.5">
-          {tasks.slice(0, 5).map((task, i) => (
-            <motion.div
-              key={task.id}
-              initial={{ opacity: 0, x: -8 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.04 }}
-            >
-              <Link to={`/task/${task.id}`}>
-                <Card className="hover:border-primary/40 transition-colors cursor-pointer">
-                  <CardContent className="flex items-center justify-between p-3">
-                    <div className="flex items-center gap-3">
-                      <span className="font-mono text-[10px] text-muted-foreground w-5">#{task.id}</span>
-                      <div>
-                        <div className="flex items-center gap-1.5 text-xs font-mono">
-                          <span>{shortenAddress(task.client)}</span>
-                          <span className="text-muted-foreground">→</span>
-                          <span>{shortenAddress(task.worker)}</span>
-                        </div>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-[10px] font-mono text-muted-foreground">
-                            {formatAmount(task.amount, task.paymentToken)} {getTokenSymbol(task.paymentToken)}
-                          </span>
-                          {task.paymentToken !== task.workerPreferredToken && (
-                            <span className="text-[10px] font-mono text-primary">
-                              → {getTokenSymbol(task.workerPreferredToken)}
+          {tasks.slice(0, 5).map((task, i) => {
+            const dl = timeUntil(task.deadline);
+            return (
+              <motion.div
+                key={task.id}
+                initial={{ opacity: 0, x: -8 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: i * 0.04 }}
+              >
+                <Link to={`/task/${task.id}`}>
+                  <Card className="hover:border-primary/40 transition-colors cursor-pointer">
+                    <CardContent className="p-3">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-[10px] text-muted-foreground">#{task.id}</span>
+                            <span className="text-xs font-semibold text-foreground truncate">
+                              {task.description.length > 80 ? task.description.slice(0, 80) + "…" : task.description}
                             </span>
+                          </div>
+                          <div className="flex items-center gap-3 mt-1.5">
+                            <span className="text-[10px] font-mono text-muted-foreground">
+                              {formatAmount(task.amount, task.paymentToken)} {getTokenSymbol(task.paymentToken)}
+                            </span>
+                            {task.paymentToken !== task.workerPreferredToken && (
+                              <span className="text-[10px] font-mono text-primary">
+                                → {getTokenSymbol(task.workerPreferredToken)}
+                              </span>
+                            )}
+                            <span className="text-[9px] text-muted-foreground font-mono">
+                              {timeAgo(task.createdAt)}
+                            </span>
+                            {dl.label !== "No deadline" && !["PaidOut", "Refunded"].includes(task.state) && (
+                              <span className={`text-[9px] font-mono flex items-center gap-0.5 ${dl.urgent ? "text-destructive" : "text-muted-foreground"}`}>
+                                <Clock className="h-2.5 w-2.5" />
+                                {dl.label}
+                              </span>
+                            )}
+                          </div>
+                          {task.capabilities.length > 0 && (
+                            <div className="flex gap-1 mt-1.5">
+                              {task.capabilities.slice(0, 3).map((cap) => (
+                                <span key={cap} className="text-[8px] font-mono px-1.5 py-0.5 bg-secondary text-secondary-foreground uppercase">
+                                  {cap}
+                                </span>
+                              ))}
+                            </div>
                           )}
-                          <span className="text-[9px] text-muted-foreground font-mono">
-                            {timeAgo(task.createdAt)}
-                          </span>
                         </div>
+                        <TaskStateMachine currentState={task.state} />
                       </div>
-                    </div>
-                    <TaskStateMachine currentState={task.state} />
-                  </CardContent>
-                </Card>
-              </Link>
-            </motion.div>
-          ))}
+                    </CardContent>
+                  </Card>
+                </Link>
+              </motion.div>
+            );
+          })}
         </div>
       </div>
 
-      {/* x402 feed */}
-      <div>
-        <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">x402 payments</span>
-        <Card className="mt-2">
-          <CardContent className="p-0">
-            <div className="divide-y divide-border">
-              {payments.map((p) => (
-                <div key={p.id} className="flex items-center justify-between px-4 py-2.5">
-                  <div className="flex items-center gap-2">
-                    <div className={`h-1.5 w-1.5 ${p.settled ? "bg-primary" : "bg-accent"}`} />
-                    <span className="font-mono text-[10px]">
-                      {shortenAddress(p.payer)} → {shortenAddress(p.provider)}
-                    </span>
-                    <span className="text-[9px] text-muted-foreground font-mono">
-                      {timeAgo(p.timestamp)}
-                    </span>
+      {/* Two-column: x402 + Audit */}
+      <div className="grid grid-cols-2 gap-3">
+        {/* x402 Micropayments */}
+        <div>
+          <div className="flex items-center gap-1.5 mb-2">
+            <Zap className="h-3 w-3 text-accent" />
+            <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">x402 Micropayments</span>
+          </div>
+          <Card>
+            <CardContent className="p-0">
+              <div className="divide-y divide-border">
+                {payments.map((p) => (
+                  <div key={p.id} className="px-4 py-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-[10px]">
+                        {formatAmount(p.amount, p.token)} {getTokenSymbol(p.token)}
+                      </span>
+                      <span className={`text-[9px] font-mono font-bold ${p.settled ? "text-primary" : "text-accent"}`}>
+                        {p.settled ? "SETTLED" : "PENDING"}
+                      </span>
+                    </div>
+                    <p className="text-[9px] text-muted-foreground mt-0.5 truncate">{p.purpose}</p>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono text-[10px] text-foreground">
-                      {formatAmount(p.amount, p.token)} {getTokenSymbol(p.token)}
-                    </span>
-                    <span className={`text-[9px] font-mono font-bold ${p.settled ? "text-primary" : "text-accent"}`}>
-                      {p.settled ? "DONE" : "PENDING"}
-                    </span>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Audit Trail */}
+        <div>
+          <div className="flex items-center gap-1.5 mb-2">
+            <Shield className="h-3 w-3 text-primary" />
+            <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">Audit Trail</span>
+          </div>
+          <Card>
+            <CardContent className="p-0">
+              <div className="divide-y divide-border">
+                {recentAudit.map((e) => (
+                  <div key={e.id} className="px-4 py-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-medium text-foreground">{e.action}</span>
+                      <span className={`text-[8px] font-mono px-1.5 py-0.5 uppercase ${
+                        e.network === "Hedera" ? "bg-accent/15 text-accent" : "bg-primary/15 text-primary"
+                      }`}>
+                        {e.network}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="text-[9px] font-mono text-muted-foreground">Task #{e.taskId}</span>
+                      <span className="text-[9px] text-muted-foreground">{timeAgo(e.timestamp)}</span>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   );
