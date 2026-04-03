@@ -62,8 +62,7 @@ export default function Dashboard() {
 
       {/* Recent Tasks */}
       <div>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-bold uppercase tracking-wider">Recent Tasks</h2>
+        <div className="flex items-center justify-end mb-3">
           <Link to="/tasks" className="text-[10px] text-primary hover:underline flex items-center gap-1 font-mono">
             View all <ArrowRight className="h-2.5 w-2.5" />
           </Link>
