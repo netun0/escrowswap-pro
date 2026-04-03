@@ -92,10 +92,7 @@ export default function Dashboard() {
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <TaskStateMachine currentState={task.state} />
-                      <StateBadge state={task.state} />
-                    </div>
+                    <TaskStateMachine currentState={task.state} />
                   </CardContent>
                 </Card>
               </Link>
