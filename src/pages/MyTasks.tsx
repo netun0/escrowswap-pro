@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { TaskStateMachine } from "@/components/TaskStateMachine";
-import { useEscrow } from "@/hooks/useEscrow";
+import { useEscrow, useWallet } from "@/hooks/useEscrow";
 import { shortenAddress, formatAmount, getTokenSymbol, timeAgo, timeUntil } from "@/contracts/mockData";
 import { TASK_STATES, type TaskState } from "@/contracts/config";
 import { cn } from "@/lib/utils";
@@ -13,13 +13,16 @@ import { Input } from "@/components/ui/input";
 
 type RoleFilter = "all" | "client" | "worker" | "verifier";
 
+const DEMO_FALLBACK_ADDR = "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38";
+
 export default function MyTasks() {
   const { tasks } = useEscrow();
+  const { address } = useWallet();
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const [stateFilter, setStateFilter] = useState<TaskState | "all">("all");
   const [search, setSearch] = useState("");
 
-  const userAddr = "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38".toLowerCase();
+  const userAddr = (address ?? DEMO_FALLBACK_ADDR).toLowerCase();
 
   const filtered = tasks.filter((t) => {
     if (roleFilter === "client" && t.client.toLowerCase() !== userAddr) return false;

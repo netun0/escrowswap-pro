@@ -7,18 +7,6 @@ import { shortenAddress, formatAmount, getTokenSymbol, timeAgo, timeUntil, MOCK_
 import { ArrowRight, Clock, Shield, Zap } from "lucide-react";
 import { TOKENS } from "@/contracts/config";
 
-function formatTokenValue(wei: number, tokenAddr: string): string {
-  for (const token of Object.values(TOKENS)) {
-    if (token.address.toLowerCase() === tokenAddr.toLowerCase()) {
-      return (wei / 10 ** token.decimals).toLocaleString("en-US", {
-        minimumFractionDigits: 0,
-        maximumFractionDigits: 2,
-      });
-    }
-  }
-  return "0";
-}
-
 export default function Dashboard() {
   const { tasks } = useEscrow();
   const { payments } = useX402();
@@ -57,64 +45,93 @@ export default function Dashboard() {
         </p>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
-          <Card>
-            <CardContent className="p-4">
-              <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">Active Jobs</span>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-3xl font-black font-mono text-accent">{activeTasks.length}</span>
-                <span className="text-[10px] text-muted-foreground font-mono">of {tasks.length}</span>
+      {/* Stats — equal quadrants (same width columns + equal card height per row) */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-3 items-stretch">
+        <motion.div
+          className="min-h-0 min-w-0 h-full"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <Card className="h-full flex flex-col">
+            <CardContent className="p-4 flex flex-col flex-1 min-h-0">
+              <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest shrink-0">Active Jobs</span>
+              <div className="mt-1 flex flex-1 flex-col justify-center gap-0.5 min-h-0">
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  <span className="text-3xl font-black font-mono text-accent leading-none">{activeTasks.length}</span>
+                  <span className="text-[10px] text-muted-foreground font-mono">of {tasks.length}</span>
+                </div>
               </div>
             </CardContent>
           </Card>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}>
-          <Card>
-            <CardContent className="p-4">
-              <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">Locked Value</span>
-              <div className="mt-1 space-y-0.5">
+        <motion.div
+          className="min-h-0 min-w-0 h-full"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.05 }}
+        >
+          <Card className="h-full flex flex-col">
+            <CardContent className="p-4 flex flex-col flex-1 min-h-0">
+              <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest shrink-0">Locked Value</span>
+              <div className="mt-1 flex-1 flex flex-col justify-center gap-1 min-h-0">
                 {Object.values(escrowedByToken).length > 0 ? (
                   Object.values(escrowedByToken).map((e) => (
-                    <div key={e.symbol} className="flex items-baseline gap-1.5">
-                      <span className="h-2 w-2 rounded-full inline-block" style={{ backgroundColor: e.color }} />
-                      <span className="text-lg font-black font-mono text-foreground">
+                    <div key={e.symbol} className="flex items-baseline gap-1.5 min-w-0">
+                      <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: e.color }} />
+                      <span className="text-lg font-black font-mono text-foreground leading-none tabular-nums truncate">
                         {e.total.toLocaleString("en-US", { maximumFractionDigits: 2 })}
                       </span>
-                      <span className="text-[10px] font-mono text-muted-foreground">{e.symbol}</span>
+                      <span className="text-[10px] font-mono text-muted-foreground shrink-0">{e.symbol}</span>
                     </div>
                   ))
                 ) : (
-                  <span className="text-lg font-black font-mono text-muted-foreground">—</span>
+                  <span className="text-lg font-black font-mono text-muted-foreground leading-none">—</span>
                 )}
               </div>
             </CardContent>
           </Card>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
-          <Card>
-            <CardContent className="p-4">
-              <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">Completed</span>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-3xl font-black font-mono text-primary">{completedTasks.length}</span>
-                <span className="text-[10px] text-muted-foreground font-mono">paid out</span>
+        <motion.div
+          className="min-h-0 min-w-0 h-full"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+        >
+          <Card className="h-full flex flex-col">
+            <CardContent className="p-4 flex flex-col flex-1 min-h-0">
+              <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest shrink-0">Completed</span>
+              <div className="mt-1 flex flex-1 flex-col justify-center gap-0.5 min-h-0">
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  <span className="text-3xl font-black font-mono text-primary leading-none">{completedTasks.length}</span>
+                  <span className="text-[10px] text-muted-foreground font-mono">paid out</span>
+                </div>
               </div>
             </CardContent>
           </Card>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
-          <Card className={urgentTasks.length > 0 ? "border-destructive/40" : ""}>
-            <CardContent className="p-4">
-              <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest">Urgent</span>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className={`text-3xl font-black font-mono ${urgentTasks.length > 0 ? "text-destructive" : "text-muted-foreground"}`}>
-                  {urgentTasks.length}
-                </span>
-                <span className="text-[10px] text-muted-foreground font-mono">near deadline</span>
+        <motion.div
+          className="min-h-0 min-w-0 h-full"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+        >
+          <Card className={`h-full flex flex-col ${urgentTasks.length > 0 ? "border-destructive/40" : ""}`}>
+            <CardContent className="p-4 flex flex-col flex-1 min-h-0">
+              <span className="text-[9px] font-mono text-muted-foreground uppercase tracking-widest shrink-0">Urgent</span>
+              <div className="mt-1 flex flex-1 flex-col justify-center gap-0.5 min-h-0">
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  <span
+                    className={`text-3xl font-black font-mono leading-none ${
+                      urgentTasks.length > 0 ? "text-destructive" : "text-muted-foreground"
+                    }`}
+                  >
+                    {urgentTasks.length}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground font-mono">near deadline</span>
+                </div>
               </div>
             </CardContent>
           </Card>

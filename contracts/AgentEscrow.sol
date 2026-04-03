@@ -3,35 +3,37 @@ pragma solidity ^0.8.20;
 
 import "./interfaces/IERC8183Escrow.sol";
 
-interface IERC20 {
+interface IERC20Escrow {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
     function transfer(address to, uint256 amount) external returns (bool);
-    function approve(address spender, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
 }
 
-interface IUniswapPayout {
-    function swapAndPay(
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn,
-        address recipient,
-        uint24 maxSlippage
-    ) external returns (uint256 amountOut);
+interface IUniswapXPayout {
+    struct SignedOrder {
+        bytes order;
+        bytes sig;
+    }
+
+    function executeSignedOrder(address tokenIn, uint256 amountIn, SignedOrder calldata signedOrder)
+        external
+        payable;
 }
 
 /**
  * @title AgentEscrow
- * @notice ERC-8183 compliant agent-to-agent escrow with Uniswap payout routing
- * @dev Manages the full lifecycle: Open → Funded → Submitted → Verified → PaidOut
+ * @notice ERC-8183 escrow with cross-token payout via UniswapX (`UniswapXPayout` + reactor).
+ * @dev Same-token payout: `verify(taskId, approved)`.
+ *      Cross-token payout: `verifyWithUniswapXOrder(...)` with a signed order built for this chain's reactor.
  */
 contract AgentEscrow is IERC8183Escrow {
     uint256 private _taskCounter;
     mapping(uint256 => Task) private _tasks;
-    IUniswapPayout public uniswapPayout;
+    IUniswapXPayout public uniswapPayout;
+
+    error CrossTokenNeedsUniswapX();
 
     constructor(address _uniswapPayout) {
-        uniswapPayout = IUniswapPayout(_uniswapPayout);
+        uniswapPayout = IUniswapXPayout(_uniswapPayout);
     }
 
     modifier onlyClient(uint256 taskId) {
@@ -87,13 +89,9 @@ contract AgentEscrow is IERC8183Escrow {
         emit TaskCreated(taskId, msg.sender, worker, verifier, amount);
     }
 
-    function fundTask(uint256 taskId)
-        external
-        onlyClient(taskId)
-        inState(taskId, TaskState.Open)
-    {
+    function fundTask(uint256 taskId) external onlyClient(taskId) inState(taskId, TaskState.Open) {
         Task storage task = _tasks[taskId];
-        IERC20(task.paymentToken).transferFrom(msg.sender, address(this), task.amount);
+        IERC20Escrow(task.paymentToken).transferFrom(msg.sender, address(this), task.amount);
         task.state = TaskState.Funded;
         task.fundedAt = block.timestamp;
         emit TaskFunded(taskId, msg.sender, task.amount);
@@ -111,64 +109,85 @@ contract AgentEscrow is IERC8183Escrow {
         emit WorkSubmitted(taskId, msg.sender, outputURI);
     }
 
+    /// @inheritdoc IERC8183Escrow
+    /// @dev Use only when `paymentToken == workerPreferredToken` or `approved == false`.
     function verify(uint256 taskId, bool approved)
         external
         onlyVerifier(taskId)
         inState(taskId, TaskState.Submitted)
     {
         Task storage task = _tasks[taskId];
+        if (approved && task.paymentToken != task.workerPreferredToken) {
+            revert CrossTokenNeedsUniswapX();
+        }
+        _finalizeVerify(taskId, task, approved, IUniswapXPayout.SignedOrder("", ""));
+    }
 
-        if (approved) {
-            task.state = TaskState.Verified;
-            task.verifiedAt = block.timestamp;
-            emit WorkVerified(taskId, msg.sender, true);
-            _executePayout(taskId);
-        } else {
+    /// @notice Approve payout; when tokens differ, executes UniswapX path with a signed order (swapper = UniswapXPayout).
+    function verifyWithUniswapXOrder(
+        uint256 taskId,
+        bool approved,
+        bytes calldata uniswapXOrder,
+        bytes calldata uniswapXSig
+    ) external onlyVerifier(taskId) inState(taskId, TaskState.Submitted) {
+        Task storage task = _tasks[taskId];
+        if (approved && task.paymentToken != task.workerPreferredToken) {
+            require(uniswapXOrder.length > 0, "empty order");
+        }
+        _finalizeVerify(
+            taskId,
+            task,
+            approved,
+            IUniswapXPayout.SignedOrder(uniswapXOrder, uniswapXSig)
+        );
+    }
+
+    function _finalizeVerify(
+        uint256 taskId,
+        Task storage task,
+        bool approved,
+        IUniswapXPayout.SignedOrder memory signedOrder
+    ) internal {
+        if (!approved) {
             task.state = TaskState.Refunded;
             task.completedAt = block.timestamp;
-            IERC20(task.paymentToken).transfer(task.client, task.amount);
+            IERC20Escrow(task.paymentToken).transfer(task.client, task.amount);
             emit WorkVerified(taskId, msg.sender, false);
             emit TaskRefunded(taskId, task.client, task.amount);
+            return;
+        }
+
+        task.state = TaskState.Verified;
+        task.verifiedAt = block.timestamp;
+        emit WorkVerified(taskId, msg.sender, true);
+
+        if (task.paymentToken == task.workerPreferredToken) {
+            IERC20Escrow(task.paymentToken).transfer(task.worker, task.amount);
+            task.state = TaskState.PaidOut;
+            task.completedAt = block.timestamp;
+            emit PayoutCompleted(taskId, task.worker, task.paymentToken, task.amount);
+        } else {
+            IERC20Escrow(task.paymentToken).transfer(address(uniswapPayout), task.amount);
+            uniswapPayout.executeSignedOrder(
+                task.paymentToken,
+                task.amount,
+                IUniswapXPayout.SignedOrder(signedOrder.order, signedOrder.sig)
+            );
+            task.state = TaskState.PaidOut;
+            task.completedAt = block.timestamp;
+            emit PayoutCompleted(taskId, task.worker, task.workerPreferredToken, 0);
         }
     }
 
     function dispute(uint256 taskId) external {
         Task storage task = _tasks[taskId];
-        require(
-            msg.sender == task.client || msg.sender == task.worker,
-            "Not participant"
-        );
+        require(msg.sender == task.client || msg.sender == task.worker, "Not participant");
         require(
             task.state == TaskState.Funded || task.state == TaskState.Submitted,
             "Cannot dispute"
         );
         task.state = TaskState.Disputed;
         emit TaskDisputed(taskId, msg.sender);
-    }
-
-    function _executePayout(uint256 taskId) internal {
-        Task storage task = _tasks[taskId];
-
-        if (task.paymentToken == task.workerPreferredToken) {
-            // Direct transfer, no swap needed
-            IERC20(task.paymentToken).transfer(task.worker, task.amount);
-            task.state = TaskState.PaidOut;
-            task.completedAt = block.timestamp;
-            emit PayoutCompleted(taskId, task.worker, task.paymentToken, task.amount);
-        } else {
-            // Swap via Uniswap and pay worker
-            IERC20(task.paymentToken).approve(address(uniswapPayout), task.amount);
-            uint256 amountOut = uniswapPayout.swapAndPay(
-                task.paymentToken,
-                task.workerPreferredToken,
-                task.amount,
-                task.worker,
-                500 // 0.05% max slippage (basis points)
-            );
-            task.state = TaskState.PaidOut;
-            task.completedAt = block.timestamp;
-            emit PayoutCompleted(taskId, task.worker, task.workerPreferredToken, amountOut);
-        }
     }
 
     function getTask(uint256 taskId) external view returns (Task memory) {

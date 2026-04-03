@@ -8,13 +8,14 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useEscrow, useUniswapQuote } from "@/hooks/useEscrow";
-import { TOKENS } from "@/contracts/config";
+import { TOKENS, VERIFIER_MODE_LABELS, type VerifierMode } from "@/contracts/config";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "@/hooks/use-toast";
 import { ArrowRightLeft, Loader2 } from "lucide-react";
 
 export default function CreateTask() {
   const navigate = useNavigate();
-  const { createTask } = useEscrow();
+  const { createTask, txPending } = useEscrow();
   const { getQuote } = useUniswapQuote();
   const [loading, setLoading] = useState(false);
   const [quote, setQuote] = useState<{ amountOut: string; priceImpact: string; fee: string } | null>(null);
@@ -24,6 +25,7 @@ export default function CreateTask() {
     specURI: "",
     worker: "",
     verifier: "",
+    verifierMode: "human" as VerifierMode,
     paymentToken: "",
     amount: "",
     workerPreferredToken: "",
@@ -52,11 +54,14 @@ export default function CreateTask() {
       const amountWei = BigInt(Math.floor(parseFloat(form.amount) * 10 ** tokenMeta.decimals)).toString();
       const taskId = await createTask({
         specURI: form.specURI || form.description,
+        description: form.description,
         worker: form.worker,
         verifier: form.verifier,
+        verifierMode: form.verifierMode,
         paymentToken: tokenMeta.address,
         amount: amountWei,
         workerPreferredToken: workerTokenMeta.address,
+        deadlineDays: parseInt(form.deadlineDays, 10) || 7,
       });
       toast({ title: "Job Created", description: `Task #${taskId} is now open for funding` });
       navigate(`/task/${taskId}`);
@@ -126,7 +131,9 @@ export default function CreateTask() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="verifier" className="text-[10px] uppercase tracking-wider">Verifier Agent</Label>
+                <Label htmlFor="verifier" className="text-[10px] uppercase tracking-wider">
+                  {form.verifierMode === "human" ? "Verifier wallet" : "Verifier wallet (agent)"}
+                </Label>
                 <Input
                   id="verifier"
                   placeholder="0x..."
@@ -135,6 +142,39 @@ export default function CreateTask() {
                   className="font-mono text-xs"
                   required
                 />
+                <p className="text-[9px] text-muted-foreground leading-relaxed">
+                  {form.verifierMode === "human"
+                    ? "A person or multisig that will sign approve or reject after reviewing the deliverable."
+                    : "The autonomous service signs verify transactions from this address once milestones and checks pass."}
+                </p>
+              </div>
+
+              <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+                <Label className="text-[10px] uppercase tracking-wider">Verification</Label>
+                <RadioGroup
+                  value={form.verifierMode}
+                  onValueChange={(v) => updateField("verifierMode", v as VerifierMode)}
+                  className="grid gap-3"
+                >
+                  <label className="flex cursor-pointer gap-3 rounded-md border border-transparent p-2 hover:bg-muted/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring">
+                    <RadioGroupItem value="human" id="vm-human" className="mt-0.5" />
+                    <div className="space-y-0.5">
+                      <span className="text-xs font-semibold">{VERIFIER_MODE_LABELS.human.title}</span>
+                      <p className="text-[9px] text-muted-foreground leading-relaxed">
+                        You or a delegate controls this address and explicitly approves payout.
+                      </p>
+                    </div>
+                  </label>
+                  <label className="flex cursor-pointer gap-3 rounded-md border border-transparent p-2 hover:bg-muted/50 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring">
+                    <RadioGroupItem value="autonomous" id="vm-auto" className="mt-0.5" />
+                    <div className="space-y-0.5">
+                      <span className="text-xs font-semibold">{VERIFIER_MODE_LABELS.autonomous.title}</span>
+                      <p className="text-[9px] text-muted-foreground leading-relaxed">
+                        An AI agent (or bot) monitors the job and calls the contract when criteria are met—no human click required.
+                      </p>
+                    </div>
+                  </label>
+                </RadioGroup>
               </div>
             </CardContent>
           </Card>
@@ -248,9 +288,9 @@ export default function CreateTask() {
           <Button
             type="submit"
             className="mt-4 w-full bg-primary text-primary-foreground font-bold uppercase tracking-wider text-xs h-10"
-            disabled={loading}
+            disabled={loading || txPending}
           >
-            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            {loading || txPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             Create Job & Lock Funds
           </Button>
         </form>

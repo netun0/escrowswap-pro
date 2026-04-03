@@ -32,6 +32,7 @@ export const MOCK_TASKS: Task[] = [
     expiresAt: now + 86400 * 7,
     maxBudget: 10000,
     capabilities: ["security", "solidity", "auditing"],
+    verifierMode: "autonomous",
   },
   {
     id: 1,
@@ -54,6 +55,7 @@ export const MOCK_TASKS: Task[] = [
     expiresAt: now + 86400 * 5,
     maxBudget: 5000,
     capabilities: ["data-engineering", "ETL", "python"],
+    verifierMode: "human",
   },
   {
     id: 2,
@@ -76,6 +78,7 @@ export const MOCK_TASKS: Task[] = [
     expiresAt: now - 86400 * 3,
     maxBudget: 15000,
     capabilities: ["research", "defi", "analysis"],
+    verifierMode: "human",
   },
   {
     id: 3,
@@ -98,6 +101,7 @@ export const MOCK_TASKS: Task[] = [
     expiresAt: now + 86400 * 14,
     maxBudget: 10000,
     capabilities: ["machine-learning", "NLP", "python"],
+    verifierMode: "autonomous",
   },
   {
     id: 4,
@@ -120,6 +124,7 @@ export const MOCK_TASKS: Task[] = [
     expiresAt: now + 86400 * 3,
     maxBudget: 2000,
     capabilities: ["security", "solidity", "tooling"],
+    verifierMode: "human",
   },
   {
     id: 5,
@@ -142,6 +147,30 @@ export const MOCK_TASKS: Task[] = [
     expiresAt: now - 86400 * 3,
     maxBudget: 5000,
     capabilities: ["api", "typescript", "frontend"],
+    verifierMode: "human",
+  },
+  {
+    id: 6,
+    client: addresses[0],
+    worker: addresses[1],
+    verifier: addresses[3],
+    specURI: "ipfs://QmAutoDemo...agent-verification",
+    outputURI: "ipfs://QmDelivered...demo-output",
+    paymentToken: TOKENS.USDC.address,
+    amount: BigInt(750e6),
+    workerPreferredToken: TOKENS.WETH.address,
+    state: "Submitted",
+    createdAt: now - 86400 * 2,
+    fundedAt: now - 86400 * 2,
+    submittedAt: now - 7200,
+    verifiedAt: 0,
+    completedAt: 0,
+    description: "Demo job: autonomous verifier mode with work already submitted (use mock agent buttons to resolve).",
+    deadline: now + 86400 * 5,
+    expiresAt: now + 86400 * 10,
+    maxBudget: 1000,
+    capabilities: ["demo", "autonomous-verifier"],
+    verifierMode: "autonomous",
   },
 ];
 

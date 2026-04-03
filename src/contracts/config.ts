@@ -7,9 +7,9 @@ export const CHAIN_CONFIG = {
   nativeCurrency: { name: "SepoliaETH", symbol: "ETH", decimals: 18 },
 } as const;
 
-// Contract addresses (update after deployment)
+// Contract addresses (set VITE_AGENT_ESCROW_ADDRESS after `npm run deploy:local` / Sepolia)
 export const CONTRACT_ADDRESSES = {
-  agentEscrow: "0x0000000000000000000000000000000000000000",
+  agentEscrow: import.meta.env.VITE_AGENT_ESCROW_ADDRESS ?? "0x0000000000000000000000000000000000000000",
   uniswapPayout: "0x0000000000000000000000000000000000000000",
   x402Relay: "0x0000000000000000000000000000000000000000",
   // Uniswap V3 SwapRouter on Sepolia
@@ -61,11 +61,27 @@ export const TASK_STATES = [
 
 export type TaskState = (typeof TASK_STATES)[number];
 
+/** Who may call verify on-chain: human wallet, or an autonomous agent-controlled verifier wallet. */
+export type VerifierMode = "human" | "autonomous";
+
+export const VERIFIER_MODE_LABELS: Record<VerifierMode, { title: string; short: string }> = {
+  human: {
+    title: "Human-in-the-loop",
+    short: "Human verifier",
+  },
+  autonomous: {
+    title: "Autonomous verifier wallet",
+    short: "Autonomous agent",
+  },
+};
+
 export interface Task {
   id: number;
   client: string;
   worker: string;
   verifier: string;
+  /** Optional at creation: human approves in a wallet, or an AI agent uses the verifier address. */
+  verifierMode: VerifierMode;
   specURI: string;
   outputURI: string;
   paymentToken: string;
