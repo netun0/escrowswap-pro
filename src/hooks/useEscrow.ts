@@ -149,6 +149,7 @@ export function useX402() {
           callHash,
           timestamp: Date.now() / 1000,
           settled: false,
+          purpose: "API call payment",
         };
         setPayments((prev) => [...prev, newPayment]);
         return newPayment.id;

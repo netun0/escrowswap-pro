@@ -10,6 +10,7 @@ const stateColors: Record<TaskState, string> = {
   PaidOut: "bg-[hsl(var(--state-paidout))]",
   Refunded: "bg-[hsl(var(--state-refunded))]",
   Disputed: "bg-[hsl(var(--state-disputed))]",
+  Expired: "bg-[hsl(var(--state-refunded))]",
 };
 
 const flowStates: TaskState[] = ["Open", "Funded", "Submitted", "Verified", "PaidOut"];

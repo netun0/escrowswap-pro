@@ -9,6 +9,7 @@ const stateStyles: Record<TaskState, string> = {
   PaidOut: "bg-[hsl(var(--state-paidout)/0.15)] text-[hsl(var(--state-paidout))] border-[hsl(var(--state-paidout)/0.4)]",
   Refunded: "bg-[hsl(var(--state-refunded)/0.15)] text-[hsl(var(--state-refunded))] border-[hsl(var(--state-refunded)/0.4)]",
   Disputed: "bg-[hsl(var(--state-disputed)/0.15)] text-[hsl(var(--state-disputed))] border-[hsl(var(--state-disputed)/0.4)]",
+  Expired: "bg-[hsl(var(--state-refunded)/0.15)] text-[hsl(var(--state-refunded))] border-[hsl(var(--state-refunded)/0.4)]",
 };
 
 export function StateBadge({ state, className }: { state: TaskState; className?: string }) {
