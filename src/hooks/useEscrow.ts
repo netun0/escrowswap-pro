@@ -73,6 +73,11 @@ export function useEscrow() {
           submittedAt: 0,
           verifiedAt: 0,
           completedAt: 0,
+          description: params.specURI,
+          deadline: Date.now() / 1000 + 86400 * 7,
+          expiresAt: Date.now() / 1000 + 86400 * 14,
+          maxBudget: 10000,
+          capabilities: [],
         };
         setTasks((prev) => [...prev, newTask]);
         return newTask.id;
