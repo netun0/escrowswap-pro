@@ -21,39 +21,39 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">
-          <span className="gradient-text">Agent Escrow</span> Dashboard
+        <h1 className="text-2xl font-black tracking-tight text-foreground">
+          Agent Escrow
         </h1>
-        <p className="mt-1 text-sm text-muted-foreground font-mono">
-          ERC-8183 · Sepolia Testnet · Uniswap V3 Payout Routing
+        <p className="mt-0.5 text-xs text-muted-foreground font-mono uppercase tracking-wider">
+          ERC-8183 · Sepolia · Uniswap V3 Routing
         </p>
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {[
-          { label: "Active Tasks", value: stats.active, icon: Clock, color: "text-[hsl(var(--state-funded))]" },
-          { label: "Completed", value: stats.completed, icon: CheckCircle2, color: "text-[hsl(var(--state-paidout))]" },
-          { label: "Total Escrowed", value: `${(stats.totalEscrowed / 1e6).toFixed(0)}`, icon: TrendingUp, color: "text-primary" },
-          { label: "Disputed", value: stats.disputed, icon: AlertTriangle, color: "text-[hsl(var(--state-disputed))]" },
+          { label: "Active", value: stats.active, icon: Clock, color: "text-accent" },
+          { label: "Completed", value: stats.completed, icon: CheckCircle2, color: "text-primary" },
+          { label: "Escrowed", value: `${(stats.totalEscrowed / 1e6).toFixed(0)}`, icon: TrendingUp, color: "text-foreground" },
+          { label: "Disputed", value: stats.disputed, icon: AlertTriangle, color: "text-destructive" },
         ].map((stat, i) => (
           <motion.div
             key={stat.label}
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1 }}
+            transition={{ delay: i * 0.06 }}
           >
-            <Card className="border-border/50 bg-card/50 backdrop-blur">
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  {stat.label}
-                </CardTitle>
-                <stat.icon className={`h-4 w-4 ${stat.color}`} />
-              </CardHeader>
-              <CardContent>
-                <div className={`text-2xl font-bold font-mono ${stat.color}`}>{stat.value}</div>
+            <Card>
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-wider">
+                    {stat.label}
+                  </span>
+                  <stat.icon className={`h-3.5 w-3.5 ${stat.color}`} />
+                </div>
+                <div className={`text-2xl font-black font-mono ${stat.color}`}>{stat.value}</div>
               </CardContent>
             </Card>
           </motion.div>
@@ -62,30 +62,30 @@ export default function Dashboard() {
 
       {/* Recent Tasks */}
       <div>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold">Recent Tasks</h2>
-          <Link to="/tasks" className="text-xs text-primary hover:underline flex items-center gap-1">
-            View all <ArrowRight className="h-3 w-3" />
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-bold uppercase tracking-wider">Recent Tasks</h2>
+          <Link to="/tasks" className="text-[10px] text-primary hover:underline flex items-center gap-1 font-mono">
+            View all <ArrowRight className="h-2.5 w-2.5" />
           </Link>
         </div>
-        <div className="space-y-3">
+        <div className="space-y-2">
           {tasks.slice(0, 5).map((task, i) => (
             <motion.div
               key={task.id}
-              initial={{ opacity: 0, x: -20 }}
+              initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.05 }}
+              transition={{ delay: i * 0.04 }}
             >
               <Link to={`/task/${task.id}`}>
-                <Card className="border-border/50 bg-card/50 backdrop-blur hover:border-primary/30 transition-all cursor-pointer">
-                  <CardContent className="flex items-center justify-between p-4">
-                    <div className="flex items-center gap-4">
+                <Card className="hover:border-primary/40 transition-colors cursor-pointer">
+                  <CardContent className="flex items-center justify-between p-3">
+                    <div className="flex items-center gap-3">
                       <span className="font-mono text-xs text-muted-foreground">#{task.id}</span>
                       <div>
-                        <p className="text-sm font-medium">
+                        <p className="text-xs font-medium font-mono">
                           {shortenAddress(task.client)} → {shortenAddress(task.worker)}
                         </p>
-                        <p className="text-xs text-muted-foreground font-mono mt-0.5">
+                        <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
                           {formatAmount(task.amount, task.paymentToken)} {getTokenSymbol(task.paymentToken)}
                           {task.paymentToken !== task.workerPreferredToken && (
                             <span className="text-primary"> → {getTokenSymbol(task.workerPreferredToken)}</span>
@@ -93,7 +93,7 @@ export default function Dashboard() {
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-3">
                       <TaskStateMachine currentState={task.state} />
                       <StateBadge state={task.state} />
                     </div>
@@ -107,23 +107,23 @@ export default function Dashboard() {
 
       {/* x402 Recent Payments */}
       <div>
-        <h2 className="text-lg font-semibold mb-4">x402 Micropayments</h2>
-        <Card className="border-border/50 bg-card/50 backdrop-blur">
+        <h2 className="text-sm font-bold uppercase tracking-wider mb-3">x402 Micropayments</h2>
+        <Card>
           <CardContent className="p-0">
             <div className="divide-y divide-border">
               {payments.map((p) => (
-                <div key={p.id} className="flex items-center justify-between px-4 py-3">
-                  <div className="flex items-center gap-3">
-                    <div className={`h-2 w-2 rounded-full ${p.settled ? "bg-primary" : "bg-[hsl(var(--state-funded))]"}`} />
-                    <span className="font-mono text-xs">
+                <div key={p.id} className="flex items-center justify-between px-4 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className={`h-1.5 w-1.5 ${p.settled ? "bg-primary" : "bg-accent"}`} />
+                    <span className="font-mono text-[10px]">
                       {shortenAddress(p.payer)} → {shortenAddress(p.provider)}
                     </span>
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className="font-mono text-xs text-muted-foreground">
+                    <span className="font-mono text-[10px] text-muted-foreground">
                       {formatAmount(p.amount, p.token)} {getTokenSymbol(p.token)}
                     </span>
-                    <span className={`text-[10px] font-mono ${p.settled ? "text-primary" : "text-[hsl(var(--state-funded))]"}`}>
+                    <span className={`text-[10px] font-mono font-bold ${p.settled ? "text-primary" : "text-accent"}`}>
                       {p.settled ? "SETTLED" : "PENDING"}
                     </span>
                   </div>

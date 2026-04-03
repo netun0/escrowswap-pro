@@ -12,7 +12,6 @@ const stateColors: Record<TaskState, string> = {
   Disputed: "bg-[hsl(var(--state-disputed))]",
 };
 
-// The main flow (excluding terminal/error states for the pipeline)
 const flowStates: TaskState[] = ["Open", "Funded", "Submitted", "Verified", "PaidOut"];
 
 export function TaskStateMachine({ currentState }: { currentState: TaskState }) {
@@ -36,17 +35,17 @@ export function TaskStateMachine({ currentState }: { currentState: TaskState }) 
             >
               <div
                 className={cn(
-                  "h-3 w-3 rounded-full border-2 transition-all",
-                  isActive && `${stateColors[state]} border-transparent shadow-lg`,
-                  isPast && "bg-primary/50 border-primary/30",
-                  isFuture && "bg-muted border-border",
-                  isTerminal && state === currentState && `${stateColors[state]} border-transparent`
+                  "h-2.5 w-2.5 transition-all",
+                  isActive && `${stateColors[state]}`,
+                  isPast && "bg-primary/40",
+                  isFuture && "bg-muted border border-border",
+                  isTerminal && state === currentState && stateColors[state]
                 )}
               />
               <span
                 className={cn(
-                  "mt-1 text-[9px] font-mono",
-                  isActive ? "text-foreground font-semibold" : "text-muted-foreground"
+                  "mt-1 text-[8px] font-mono uppercase tracking-wider",
+                  isActive ? "text-foreground font-bold" : "text-muted-foreground"
                 )}
               >
                 {state}
@@ -55,8 +54,8 @@ export function TaskStateMachine({ currentState }: { currentState: TaskState }) 
             {idx < flowStates.length - 1 && (
               <div
                 className={cn(
-                  "h-0.5 w-6 -mt-3 rounded",
-                  isPast ? "bg-primary/50" : "bg-border"
+                  "h-px w-5 -mt-3",
+                  isPast ? "bg-primary/40" : "bg-border"
                 )}
               />
             )}
@@ -65,10 +64,10 @@ export function TaskStateMachine({ currentState }: { currentState: TaskState }) 
       })}
       {isTerminal && (
         <>
-          <div className="h-0.5 w-6 -mt-3 rounded bg-destructive/30" />
+          <div className="h-px w-5 -mt-3 bg-destructive/30" />
           <div className="flex flex-col items-center">
-            <div className={cn("h-3 w-3 rounded-full", stateColors[currentState])} />
-            <span className="mt-1 text-[9px] font-mono font-semibold text-foreground">
+            <div className={cn("h-2.5 w-2.5", stateColors[currentState])} />
+            <span className="mt-1 text-[8px] font-mono font-bold text-foreground uppercase tracking-wider">
               {currentState}
             </span>
           </div>
