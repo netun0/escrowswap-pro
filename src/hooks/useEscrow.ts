@@ -249,11 +249,31 @@ export function useEscrow() {
     [fetchTasks],
   );
 
+  const syncOnChain = useCallback(
+    async (taskId: number, txHash?: string) => {
+      if (ESCROW_USE_MOCK) return;
+      if (!HEDERA_API_URL) throw new Error("VITE_HEDERA_API_URL is not set");
+      setTxPending(true);
+      try {
+        const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/onchain-sync`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(txHash ? { txHash } : {}),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        await fetchTasks();
+      } finally {
+        setTxPending(false);
+      }
+    },
+    [fetchTasks],
+  );
+
   useEffect(() => {
     fetchTasks();
   }, [fetchTasks]);
 
-  return { tasks, loading, txPending, createTask, advanceState, fetchTasks };
+  return { tasks, loading, txPending, createTask, advanceState, fetchTasks, syncOnChain };
 }
 
 export function useX402() {

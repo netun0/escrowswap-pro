@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { TASK_STATES, type TaskState } from "@/contracts/config";
+import type { TaskState } from "@/contracts/config";
 import { cn } from "@/lib/utils";
 
 const stateColors: Record<TaskState, string> = {
@@ -9,6 +9,7 @@ const stateColors: Record<TaskState, string> = {
   Verified: "bg-[hsl(var(--state-verified))]",
   PaidOut: "bg-[hsl(var(--state-paidout))]",
   Refunded: "bg-[hsl(var(--state-refunded))]",
+  EscrowRefundPending: "bg-[hsl(var(--state-escrow-refund))]",
   Disputed: "bg-[hsl(var(--state-disputed))]",
   Expired: "bg-[hsl(var(--state-refunded))]",
 };
@@ -16,6 +17,45 @@ const stateColors: Record<TaskState, string> = {
 const flowStates: TaskState[] = ["Open", "Funded", "Submitted", "Verified", "PaidOut"];
 
 export function TaskStateMachine({ currentState }: { currentState: TaskState }) {
+  if (currentState === "EscrowRefundPending") {
+    const prefix: TaskState[] = ["Open", "Funded", "Submitted"];
+    const currentIdx = 3;
+    return (
+      <div className="flex items-center gap-1 flex-wrap justify-center">
+        {prefix.map((state, idx) => {
+          const isPast = idx < currentIdx;
+          return (
+            <div key={state} className="flex items-center gap-1">
+              <div className="flex flex-col items-center">
+                <div
+                  className={`h-3 w-3 transition-all ${isPast ? "bg-primary/40" : "bg-muted-foreground/20"}`}
+                  style={{ clipPath: "polygon(0 0, 100% 50%, 0 100%)" }}
+                />
+                <span className="mt-1 text-[8px] font-mono uppercase tracking-wider text-muted-foreground">{state}</span>
+              </div>
+              {idx < prefix.length - 1 && <div className="h-px w-5 -mt-3 bg-primary/40" />}
+            </div>
+          );
+        })}
+        <div className="h-px w-5 -mt-3 bg-destructive/30" />
+        <div className="flex flex-col items-center">
+          <div
+            className={`h-3 w-3 ${stateColors.EscrowRefundPending}`}
+            style={{ clipPath: "polygon(0 0, 100% 50%, 0 100%)" }}
+          />
+          <span className="mt-1 text-[8px] font-mono font-bold text-foreground uppercase tracking-wider">
+            EscrowRefund…
+          </span>
+        </div>
+        <div className="h-px w-5 -mt-3 bg-border" />
+        <div className="flex flex-col items-center opacity-50">
+          <div className="h-3 w-3 bg-muted-foreground/20" style={{ clipPath: "polygon(0 0, 100% 50%, 0 100%)" }} />
+          <span className="mt-1 text-[8px] font-mono uppercase tracking-wider text-muted-foreground">Refunded</span>
+        </div>
+      </div>
+    );
+  }
+
   const currentIdx = flowStates.indexOf(currentState);
   const isTerminal = currentState === "Refunded" || currentState === "Disputed" || currentState === "Expired";
 

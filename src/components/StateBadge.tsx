@@ -8,6 +8,8 @@ const stateStyles: Record<TaskState, string> = {
   Verified: "bg-[hsl(var(--state-verified)/0.15)] text-[hsl(var(--state-verified))] border-[hsl(var(--state-verified)/0.4)]",
   PaidOut: "bg-[hsl(var(--state-paidout)/0.15)] text-[hsl(var(--state-paidout))] border-[hsl(var(--state-paidout)/0.4)]",
   Refunded: "bg-[hsl(var(--state-refunded)/0.15)] text-[hsl(var(--state-refunded))] border-[hsl(var(--state-refunded)/0.4)]",
+  EscrowRefundPending:
+    "bg-[hsl(var(--state-escrow-refund)/0.15)] text-[hsl(var(--state-escrow-refund))] border-[hsl(var(--state-escrow-refund)/0.4)]",
   Disputed: "bg-[hsl(var(--state-disputed)/0.15)] text-[hsl(var(--state-disputed))] border-[hsl(var(--state-disputed)/0.4)]",
   Expired: "bg-[hsl(var(--state-refunded)/0.15)] text-[hsl(var(--state-refunded))] border-[hsl(var(--state-refunded)/0.4)]",
 };

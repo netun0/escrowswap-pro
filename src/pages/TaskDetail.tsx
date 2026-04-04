@@ -7,8 +7,22 @@ import { useEscrow, useWallet } from "@/hooks/useEscrow";
 import { shortenAddress, formatAmount, getTokenSymbol, timeUntil, MOCK_AUDIT_EVENTS } from "@/contracts/mockData";
 import { ArrowLeft, ExternalLink, Copy, Clock, Shield, AlertTriangle, Loader2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
-import { CHAIN_CONFIG, VERIFIER_MODE_LABELS, hashscanTransactionUrl, type TaskLedgerTx } from "@/contracts/config";
+import {
+  CHAIN_CONFIG,
+  VERIFIER_MODE_LABELS,
+  hashscanTransactionUrl,
+  hashscanEvmTxUrl,
+  type TaskLedgerTx,
+} from "@/contracts/config";
 import { ESCROW_USE_MOCK } from "@/contracts/env";
+import {
+  ensureHederaEvmChain,
+  approveTokenForEscrow,
+  fundTaskOnChain,
+  releaseOnChain,
+  refundOnChain,
+  getInjectedEip1193,
+} from "@/lib/hederaEscrowContract";
 
 function idsEqual(a: string | null | undefined, b: string): boolean {
   if (!a) return false;
@@ -28,13 +42,16 @@ const LEDGER_LABELS: { key: keyof TaskLedgerTx; label: string }[] = [
   { key: "submitted", label: "Submitted (HCS)" },
   { key: "rejected", label: "Rejected (HCS)" },
   { key: "dispute", label: "Dispute (HCS)" },
-  { key: "settlement", label: "Payout transfer (HBAR / HTS)" },
+  { key: "settlement", label: "Payout transfer (HBAR / HTS / EVM release)" },
   { key: "paidAudit", label: "Paid audit (HCS)" },
+  { key: "onChainFund", label: "On-chain fund (EVM)" },
+  { key: "onChainRelease", label: "On-chain release (EVM)" },
+  { key: "onChainRefund", label: "On-chain refund (EVM)" },
 ];
 
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>();
-  const { tasks, advanceState, txPending } = useEscrow();
+  const { tasks, advanceState, txPending, syncOnChain } = useEscrow();
   const { address } = useWallet();
   const task = tasks.find((t) => t.id === Number(id));
 
@@ -80,8 +97,43 @@ export default function TaskDetail() {
   const onFund = () => runTx(() => advanceState(task.id, "fund"), "Marked funded — send HBAR/HTS to the operator if you have not yet");
   const onSubmit = () => runTx(() => advanceState(task.id, "submit"), "Work submitted");
   const onDispute = () => runTx(() => advanceState(task.id, "dispute"), "Dispute opened");
-  const onReject = () => runTx(() => advanceState(task.id, "reject"), "Rejected — client refunded (operator flow)");
-  const onApprovePay = () => runTx(() => advanceState(task.id, "verify"), "Approved — settlement submitted");
+  const onReject = () => runTx(() => advanceState(task.id, "reject"), "Recorded reject — next step depends on escrow mode");
+  const onApprovePay = () => runTx(() => advanceState(task.id, "verify"), "Approved — verifier decision recorded");
+
+  const runFundOnChain = () =>
+    runTx(async () => {
+      const eth = getInjectedEip1193();
+      if (!eth) throw new Error("No injected wallet (window.ethereum).");
+      if (!task.escrowContract) throw new Error("Not an on-chain escrow task.");
+      await ensureHederaEvmChain(eth);
+      const approveTx = await approveTokenForEscrow(task);
+      await approveTx.wait();
+      const fundTx = await fundTaskOnChain(task);
+      const rec = await fundTx.wait();
+      await syncOnChain(task.id, rec?.hash);
+    }, "Funded on-chain — escrow locked");
+
+  const runReleaseOnChain = () =>
+    runTx(async () => {
+      const eth = getInjectedEip1193();
+      if (!eth) throw new Error("No injected wallet.");
+      await ensureHederaEvmChain(eth);
+      const tx = await releaseOnChain(task.id);
+      const rec = await tx.wait();
+      await syncOnChain(task.id, rec?.hash);
+    }, "Released — tokens sent to worker");
+
+  const runRefundOnChain = () =>
+    runTx(async () => {
+      const eth = getInjectedEip1193();
+      if (!eth) throw new Error("No injected wallet.");
+      await ensureHederaEvmChain(eth);
+      const tx = await refundOnChain(task.id);
+      const rec = await tx.wait();
+      await syncOnChain(task.id, rec?.hash);
+    }, "Refunded — tokens returned to client");
+
+  const runSyncOnly = () => runTx(() => syncOnChain(task.id), "Synced with contract");
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
@@ -241,9 +293,22 @@ export default function TaskDetail() {
           {!ESCROW_USE_MOCK && (
             <p className="text-[9px] text-muted-foreground font-mono leading-relaxed">
               Job create / fund / submit write <strong>HCS</strong> when <code className="text-foreground">HCS_TOPIC_ID</code> is set.
-              <strong> Approve &amp; Pay</strong> runs a <strong>transfer</strong> (needs operator keys and{" "}
-              <code className="text-foreground">HEDERA_DRY_RUN=false</code>). Watch the API terminal for{" "}
-              <code className="text-foreground">[ledger]</code> lines.
+              {task.escrowContract ? (
+                <>
+                  {" "}
+                  This task uses <strong>HederaTaskEscrow</strong>: escrow is on Hedera EVM; the verifier signs{" "}
+                  <code className="text-foreground">release</code> / <code className="text-foreground">refund</code> from their EVM
+                  wallet (chain id 296). <strong>Approve &amp; Pay</strong> only records approval — it does not move tokens until{" "}
+                  <code className="text-foreground">release</code> + sync.
+                </>
+              ) : (
+                <>
+                  {" "}
+                  <strong> Approve &amp; Pay</strong> runs a <strong>transfer</strong> (needs operator keys and{" "}
+                  <code className="text-foreground">HEDERA_DRY_RUN=false</code>).
+                </>
+              )}{" "}
+              Watch the API terminal for <code className="text-foreground">[ledger]</code> lines.
             </p>
           )}
           {(import.meta.env.VITE_HEDERA_OPERATOR_ID as string | undefined)?.trim() && task.state === "Open" && (
@@ -271,7 +336,7 @@ export default function TaskDetail() {
                 const txId = task.ledgerTx?.[key];
                 if (!txId) return null;
                 const isDry = txId.startsWith("dry-run");
-                const href = isDry ? undefined : hashscanTransactionUrl(txId);
+                const href = isDry ? undefined : txId.startsWith("0x") ? hashscanEvmTxUrl(txId) : hashscanTransactionUrl(txId);
                 return (
                   <li key={key} className="flex flex-col gap-0.5 border-b border-border/60 pb-2 last:border-0 last:pb-0">
                     <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">{label}</span>
@@ -367,14 +432,27 @@ export default function TaskDetail() {
           <CardContent className="flex flex-col gap-3 p-3 pt-0">
             <div className="flex flex-wrap gap-2">
               {task.state === "Open" && (
-                <Button
-                  className="bg-primary text-primary-foreground font-bold text-xs uppercase tracking-wider"
-                  disabled={!isClient || txPending}
-                  onClick={onFund}
-                >
-                  {txPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                  Mark funded
-                </Button>
+                <>
+                  {task.escrowContract && !ESCROW_USE_MOCK ? (
+                    <Button
+                      className="bg-primary text-primary-foreground font-bold text-xs uppercase tracking-wider"
+                      disabled={!isClient || txPending}
+                      onClick={runFundOnChain}
+                    >
+                      {txPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                      Approve token &amp; fund escrow (EVM)
+                    </Button>
+                  ) : (
+                    <Button
+                      className="bg-primary text-primary-foreground font-bold text-xs uppercase tracking-wider"
+                      disabled={!isClient || txPending}
+                      onClick={onFund}
+                    >
+                      {txPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                      Mark funded
+                    </Button>
+                  )}
+                </>
               )}
               {task.state === "Funded" && (
                 <Button
@@ -394,7 +472,7 @@ export default function TaskDetail() {
                     onClick={onApprovePay}
                   >
                     {txPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
-                    Approve & Pay
+                    {task.escrowContract && !ESCROW_USE_MOCK ? "Approve work (then on-chain release)" : "Approve & Pay"}
                   </Button>
                   <Button
                     variant="destructive"
@@ -402,9 +480,35 @@ export default function TaskDetail() {
                     disabled={txPending}
                     onClick={onReject}
                   >
-                    Reject
+                    {task.escrowContract && !ESCROW_USE_MOCK ? "Reject (then on-chain refund)" : "Reject"}
                   </Button>
                 </>
+              )}
+              {task.state === "Verified" && task.escrowContract && task.escrowPendingAction === "release" && isVerifier && !ESCROW_USE_MOCK && (
+                <Button
+                  className="bg-[hsl(var(--state-paidout))] text-primary-foreground font-bold text-xs uppercase tracking-wider"
+                  disabled={txPending}
+                  onClick={runReleaseOnChain}
+                >
+                  {txPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                  Sign release (EVM) — pay worker
+                </Button>
+              )}
+              {task.state === "EscrowRefundPending" && task.escrowContract && isVerifier && !ESCROW_USE_MOCK && (
+                <Button
+                  variant="destructive"
+                  className="font-bold text-xs uppercase tracking-wider"
+                  disabled={txPending}
+                  onClick={runRefundOnChain}
+                >
+                  {txPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                  Sign refund (EVM) — return to client
+                </Button>
+              )}
+              {task.escrowContract && !ESCROW_USE_MOCK && !["PaidOut", "Refunded", "Expired"].includes(task.state) && (
+                <Button variant="outline" className="text-[10px] font-mono uppercase" disabled={txPending} onClick={runSyncOnly}>
+                  Sync on-chain state
+                </Button>
               )}
               {["Funded", "Submitted"].includes(task.state) && (isClient || isWorker) && (
                 <Button
@@ -420,8 +524,18 @@ export default function TaskDetail() {
 
             {task.state === "Open" && isClient && (
               <p className="text-[10px] text-muted-foreground font-mono border border-border bg-muted/20 px-3 py-2">
-                MVP: transfer HBAR or HTS to the operator account on HashScan, then press “Mark funded”. The server records state and
-                HCS logs when configured.
+                {task.escrowContract && !ESCROW_USE_MOCK ? (
+                  <>
+                    Connect a wallet on <strong>Hedera Testnet EVM</strong> (chain 296) with the <strong>same keys as your 0.0.x</strong>{" "}
+                    client account. Approve the HTS token, then <code className="text-foreground">fundTask</code> locks tokens in the
+                    escrow contract.
+                  </>
+                ) : (
+                  <>
+                    MVP: transfer HBAR or HTS to the operator account on HashScan, then press “Mark funded”. The server records state
+                    and HCS logs when configured.
+                  </>
+                )}
               </p>
             )}
 

@@ -17,6 +17,12 @@ export function hashscanTransactionUrl(transactionId: string): string {
   return `${CHAIN_CONFIG.blockExplorer}/transaction/${slug}`;
 }
 
+/** HashScan URL for an EVM `0x` transaction hash on the same network as `CHAIN_CONFIG`. */
+export function hashscanEvmTxUrl(txHash: string): string {
+  const hex = txHash.startsWith("0x") ? txHash : `0x${txHash}`;
+  return `${CHAIN_CONFIG.blockExplorer}/transaction/${hex}`;
+}
+
 /** Demo HTS / HBAR — `address` is either `HBAR` or a token id `0.0.x` (matches prior Task shape). */
 export const TOKENS: Record<string, { address: string; symbol: string; name: string; decimals: number; logoColor: string }> = {
   HBAR: {
@@ -42,6 +48,7 @@ export const TASK_STATES = [
   "Verified",
   "PaidOut",
   "Refunded",
+  "EscrowRefundPending",
   "Disputed",
   "Expired",
 ] as const;
@@ -72,6 +79,9 @@ export type TaskLedgerTx = Partial<{
   settlement: string;
   /** HCS message written after successful settlement */
   paidAudit: string;
+  onChainFund: string;
+  onChainRelease: string;
+  onChainRefund: string;
 }>;
 
 export interface Task {
@@ -97,6 +107,13 @@ export interface Task {
   maxBudget: number;
   capabilities: string[];
   ledgerTx?: TaskLedgerTx;
+  /** Hedera EVM escrow (`HederaTaskEscrow`); set by API when server has `ESCROW_CONTRACT_ADDRESS`. */
+  escrowContract?: boolean;
+  clientEvm?: string;
+  workerEvm?: string;
+  verifierEvm?: string;
+  tokenEvm?: string;
+  escrowPendingAction?: "release" | "refund";
 }
 
 export interface MicroPayment {
