@@ -205,7 +205,7 @@ src/hackathon/       # Event-style UI
 
 ## License
 
-Apache-2.0 (see SPDX header in `contracts/HederaTaskEscrow.sol`). Add a root `LICENSE` if your hackathon requires it.
+Apache-2.0 (see SPDX header in `contracts/HederaTaskEscrow.sol`).
 
 ---
 
