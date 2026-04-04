@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { TaskStateMachine } from "@/components/TaskStateMachine";
-import { useEscrow, useWallet } from "@/hooks/useEscrow";
+import { useEscrow } from "@/hooks/useEscrow";
 import { shortenAddress, formatAmount, getTokenSymbol, timeUntil, MOCK_AUDIT_EVENTS } from "@/contracts/mockData";
 import { ArrowLeft, ExternalLink, Copy, Clock, Shield, AlertTriangle, Loader2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
@@ -17,6 +17,8 @@ import {
   type TaskLedgerTx,
 } from "@/contracts/config";
 import { ESCROW_USE_MOCK } from "@/contracts/env";
+import { useAuth } from "@/auth/useAuth";
+import { AuthRequiredCta } from "@/components/AuthRequiredCta";
 import {
   ensureHederaEvmChain,
   approveTokenForEscrow,
@@ -55,7 +57,8 @@ const LEDGER_LABELS: { key: keyof TaskLedgerTx; label: string }[] = [
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>();
   const { tasks, advanceState, txPending, syncOnChain } = useEscrow();
-  const { address } = useWallet();
+  const { authenticated, openAuthDialog, user } = useAuth();
+
   const task = tasks.find((t) => t.id === Number(id));
   const [browserEvm, setBrowserEvm] = useState<string | null>(null);
 
@@ -108,9 +111,10 @@ export default function TaskDetail() {
   const expiry = timeUntil(task.expiresAt);
   const taskAudit = MOCK_AUDIT_EVENTS.filter((e) => e.taskId === task.id);
 
-  const isClient = idsEqual(address, task.client);
-  const isWorker = idsEqual(address, task.worker);
-  const isVerifier = idsEqual(address, task.verifier);
+  const accountId = user?.accountId ?? null;
+  const isClient = idsEqual(accountId, task.client);
+  const isWorker = idsEqual(accountId, task.worker);
+  const isVerifier = idsEqual(accountId, task.verifier);
   const humanVerifier = task.verifierMode === "human";
   const autonomousVerifier = task.verifierMode === "autonomous";
   const evmClientWalletMismatch = Boolean(
@@ -122,6 +126,12 @@ export default function TaskDetail() {
   );
 
   const runTx = async (fn: () => Promise<void>, okTitle: string) => {
+    if (!authenticated) {
+      openAuthDialog();
+      toast({ title: "Authentication required", description: "Sign in with HashPack before taking task actions." });
+      return;
+    }
+
     try {
       await fn();
       toast({ title: okTitle });
@@ -461,28 +471,33 @@ export default function TaskDetail() {
         <Card className="border-primary/20">
           <CardHeader className="pb-2 pt-4 px-4">
             <CardTitle className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Actions</CardTitle>
-            {!address && (
-              <p className="text-[10px] text-muted-foreground font-mono mt-1">
-                Set your Hedera account id in the sidebar to enable role checks (client / worker / verifier).
+            {!authenticated && (
+              <p className="mt-1 font-mono text-[10px] text-muted-foreground">
+                Sign in with HashPack to act as the task client, worker, or verifier.
               </p>
             )}
           </CardHeader>
           <CardContent className="flex flex-col gap-3 p-3 pt-0">
+            {!authenticated && (
+              <AuthRequiredCta description="Task actions are authorized against your signed-in Hedera account." />
+            )}
+
             {evmClientWalletMismatch && (
-                <p className="text-[10px] text-amber-700 dark:text-amber-400 border border-amber-500/40 bg-amber-500/10 px-3 py-2 rounded-md font-mono leading-relaxed">
-                  <strong>Wrong EVM wallet.</strong> Browser wallet is {shortenAddress(browserEvm)} but this task&apos;s client is{" "}
-                  {shortenAddress(task.clientEvm)}. Switch MetaMask (or HashPack) to the <em>client</em> account — the contract pulls
-                  tokens from <code className="text-foreground">msg.sender</code>.{" "}
-                  <span className="opacity-90">(Carteira errada: use a conta do cliente que criou o job.)</span>
-                </p>
-              )}
+              <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 font-mono text-[10px] leading-relaxed text-amber-700 dark:text-amber-400">
+                <strong>Wrong EVM wallet.</strong> Browser wallet is {shortenAddress(browserEvm)} but this task&apos;s client is{" "}
+                {shortenAddress(task.clientEvm)}. Switch MetaMask (or HashPack) to the <em>client</em> account; the contract pulls
+                tokens from <code className="text-foreground">msg.sender</code>.{" "}
+                <span className="opacity-90">(Carteira errada: use a conta do cliente que criou o job.)</span>
+              </p>
+            )}
+
             <div className="flex flex-wrap gap-2">
               {task.state === "Open" && (
                 <>
                   {task.escrowContract && !ESCROW_USE_MOCK ? (
                     <Button
                       className="bg-primary text-primary-foreground font-bold text-xs uppercase tracking-wider"
-                      disabled={!isClient || txPending || evmClientWalletMismatch}
+                      disabled={!authenticated || !isClient || txPending || evmClientWalletMismatch}
                       onClick={runFundOnChain}
                     >
                       {txPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
@@ -491,7 +506,7 @@ export default function TaskDetail() {
                   ) : (
                     <Button
                       className="bg-primary text-primary-foreground font-bold text-xs uppercase tracking-wider"
-                      disabled={!isClient || txPending}
+                      disabled={!authenticated || !isClient || txPending}
                       onClick={onFund}
                     >
                       {txPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
@@ -503,7 +518,7 @@ export default function TaskDetail() {
               {task.state === "Funded" && (
                 <Button
                   className="bg-primary text-primary-foreground font-bold text-xs uppercase tracking-wider"
-                  disabled={!isWorker || txPending}
+                  disabled={!authenticated || !isWorker || txPending}
                   onClick={onSubmit}
                 >
                   {txPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
@@ -514,7 +529,7 @@ export default function TaskDetail() {
                 <>
                   <Button
                     className="bg-[hsl(var(--state-verified))] text-primary-foreground font-bold text-xs uppercase tracking-wider"
-                    disabled={txPending || (!ESCROW_USE_MOCK && !samePayoutToken)}
+                    disabled={!authenticated || txPending || (!ESCROW_USE_MOCK && !samePayoutToken)}
                     onClick={onApprovePay}
                   >
                     {txPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
@@ -523,7 +538,7 @@ export default function TaskDetail() {
                   <Button
                     variant="destructive"
                     className="font-bold text-xs uppercase tracking-wider"
-                    disabled={txPending}
+                    disabled={!authenticated || txPending}
                     onClick={onReject}
                   >
                     {task.escrowContract && !ESCROW_USE_MOCK ? "Reject (then on-chain refund)" : "Reject"}
@@ -560,7 +575,7 @@ export default function TaskDetail() {
                 <Button
                   variant="outline"
                   className="border-[hsl(var(--state-disputed))] text-[hsl(var(--state-disputed))] font-bold text-xs uppercase tracking-wider"
-                  disabled={txPending}
+                  disabled={!authenticated || txPending}
                   onClick={onDispute}
                 >
                   Dispute
@@ -586,7 +601,7 @@ export default function TaskDetail() {
               </p>
             )}
 
-            {task.state === "Submitted" && address && !isVerifier && (
+            {task.state === "Submitted" && authenticated && accountId && !isVerifier && (
               <p className="text-[10px] text-muted-foreground font-mono border border-border bg-muted/20 px-3 py-2">
                 Only the verifier account ({shortenAddress(task.verifier)}) can approve or reject.
               </p>

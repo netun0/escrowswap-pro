@@ -12,45 +12,10 @@ function apiTaskToTask(raw: ApiTask): Task {
 }
 
 async function apiGetTasks(): Promise<Task[]> {
-  const r = await fetch(`${HEDERA_API_URL}/tasks`);
+  const r = await fetch(`${HEDERA_API_URL}/tasks`, { credentials: "include" });
   if (!r.ok) throw new Error(await r.text());
   const data = (await r.json()) as ApiTask[];
   return data.map(apiTaskToTask);
-}
-
-export function useWallet() {
-  const [hederaAccountId, setHederaAccountId] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return localStorage.getItem("hederaClientId");
-  });
-  const [connecting, setConnecting] = useState(false);
-
-  const connect = useCallback(async () => {
-    setConnecting(true);
-    try {
-      const input =
-        typeof window !== "undefined"
-          ? window.prompt(
-              "Enter your Hedera account id (0.0.x). Used to enable role-gated actions against the API.",
-              hederaAccountId ?? "0.0.1001",
-            )
-          : null;
-      if (input && /^\d+\.\d+\.\d+$/.test(input.trim())) {
-        const id = input.trim();
-        setHederaAccountId(id);
-        localStorage.setItem("hederaClientId", id);
-      }
-    } finally {
-      setConnecting(false);
-    }
-  }, [hederaAccountId]);
-
-  const disconnect = useCallback(() => {
-    setHederaAccountId(null);
-    localStorage.removeItem("hederaClientId");
-  }, []);
-
-  return { address: hederaAccountId, connecting, connect, disconnect };
 }
 
 export type AdvanceOptions = {
@@ -95,7 +60,7 @@ export function useEscrow() {
       workerPreferredToken: string;
       deadlineDays?: number;
       deadlineUnix?: number;
-      clientId?: string;
+      clientAccountId?: string;
     }) => {
       if (ESCROW_USE_MOCK) {
         const nowSec = Date.now() / 1000;
@@ -109,7 +74,7 @@ export function useEscrow() {
           deadlineSec = nowSec + 86400 * days;
           expiresAtSec = nowSec + 86400 * (days + 7);
         }
-        const client = params.clientId ?? "0.0.1001";
+        const client = params.clientAccountId ?? "0.0.1001";
         let newId = 0;
         setTasks((prev) => {
           newId = prev.length === 0 ? 0 : Math.max(...prev.map((t) => t.id)) + 1;
@@ -142,15 +107,10 @@ export function useEscrow() {
       }
 
       if (!HEDERA_API_URL) throw new Error("VITE_HEDERA_API_URL is not set");
-      const clientId = params.clientId?.trim();
-      if (!clientId || !/^\d+\.\d+\.\d+$/.test(clientId)) {
-        throw new Error("Set your Hedera client id in the sidebar before creating a task.");
-      }
 
       setTxPending(true);
       try {
         const body = {
-          clientId,
           worker: params.worker,
           verifier: params.verifier,
           verifierMode: params.verifierMode,
@@ -163,6 +123,7 @@ export function useEscrow() {
         };
         const r = await fetch(`${HEDERA_API_URL}/tasks`, {
           method: "POST",
+          credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
@@ -214,11 +175,17 @@ export function useEscrow() {
       setTxPending(true);
       try {
         if (action === "fund") {
-          const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/fund`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+          const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/fund`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
           if (!r.ok) throw new Error(await r.text());
         } else if (action === "submit") {
           const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/submit`, {
             method: "POST",
+            credentials: "include",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ outputURI: opts?.outputURI ?? `ipfs://deliverable-${Date.now()}` }),
           });
@@ -226,16 +193,23 @@ export function useEscrow() {
         } else if (action === "reject") {
           const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/verify`, {
             method: "POST",
+            credentials: "include",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ approved: false }),
           });
           if (!r.ok) throw new Error(await r.text());
         } else if (action === "dispute") {
-          const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/dispute`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+          const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/dispute`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+          });
           if (!r.ok) throw new Error(await r.text());
         } else if (action === "verify") {
           const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/verify`, {
             method: "POST",
+            credentials: "include",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ approved: true }),
           });
