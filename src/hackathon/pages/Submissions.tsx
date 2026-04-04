@@ -1,6 +1,6 @@
 import { useSearchParams } from "react-router-dom";
 import { MOCK_HACKATHONS } from "../mockData";
-import { CheckCircle2, XCircle, AlertTriangle, ArrowLeft, ExternalLink, Github, Play } from "lucide-react";
+import { CheckCircle2, XCircle, AlertTriangle, ArrowLeft, ExternalLink, FolderGit2, Play } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import type { Submission } from "../types";
@@ -58,7 +58,7 @@ function SubmissionDetail({ sub, hackathon }: { sub: Submission; hackathon: type
         <div className="flex items-center gap-3">
           {sub.githubUrl && (
             <a href={sub.githubUrl} target="_blank" rel="noopener" className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground">
-              <Github className="h-3 w-3" /> Repo <ExternalLink className="h-2.5 w-2.5" />
+              <FolderGit2 className="h-3 w-3" /> Repo <ExternalLink className="h-2.5 w-2.5" />
             </a>
           )}
           {sub.demoUrl && (

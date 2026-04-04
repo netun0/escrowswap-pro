@@ -123,6 +123,17 @@ Copy [.env.example](.env.example) to `.env` at the **repo root** (server loads t
 | `HCS_TOPIC_ID` | Topic for audit messages |
 | `HEDERA_DRY_RUN=true` | Skip paid txs while iterating |
 
+**OpenAI project segmentation queue:**
+
+| Variable | Purpose |
+|----------|---------|
+| `OPENAI_API_KEY` | Enables the OpenAI-backed segmentation worker |
+| `OPENAI_SEGMENT_MODEL` | Model used for project segmentation (`gpt-4o-mini` by default) |
+| `OPENAI_BASE_URL` | Optional proxy/base URL override for the Responses API |
+| `OPENAI_SEGMENT_TIMEOUT_MS` | Request timeout for segmentation jobs |
+| `PROJECT_SEGMENTATION_STORE_PATH` | Optional JSON store path for queued Hedera project events |
+| `HEDERA_QUEUE_SHARED_SECRET` | Optional shared secret required by `POST /hedera/project-events` |
+
 ---
 
 ## Deploy escrow contract (testnet)
@@ -158,14 +169,43 @@ Show **HashScan** links for HCS and EVM txs from the task detail ledger section.
 | `GET` | `/health` | Network / operator / escrow hints |
 | `GET` | `/tasks` | List tasks |
 | `GET` | `/tasks/:id` | Single task |
+| `GET` | `/segmentation/projects` | List queued / processed project submissions |
+| `GET` | `/segmentation/projects/:id` | Submission details plus all segmentation jobs |
+| `GET` | `/segmentation/jobs` | Queue job history |
 | `POST` | `/tasks` | Create (body: client, worker, verifier, token, amount, …) |
 | `POST` | `/tasks/:id/fund` | Legacy funding only (409 if `escrowContract`) |
 | `POST` | `/tasks/:id/submit` | Worker submission |
 | `POST` | `/tasks/:id/verify` | Approve / reject (escrow → off-chain state + verifier txs) |
 | `POST` | `/tasks/:id/dispute` | Dispute |
 | `POST` | `/tasks/:id/onchain-sync` | Read contract; body optional `{ "txHash": "0x…" }` |
+| `POST` | `/segmentation/projects` | Queue a manual project for OpenAI segmentation |
+| `POST` | `/segmentation/projects/:id/requeue` | Re-run segmentation for an existing submission |
+| `POST` | `/segmentation/process` | Trigger the background worker immediately |
+| `POST` | `/hedera/project-events` | Ingest a Hedera-originated project payload and enqueue it |
 
 Amounts are **integer strings in smallest token units** (e.g. USDC 6 decimals: `0.1` USDC → `"100000"`).
+
+### Hedera project queue payload
+
+`POST /hedera/project-events` accepts a top-level `project`, `submission`, or `payload` object. At minimum, the nested project payload must include:
+
+- `projectName`
+- `description`
+
+Useful optional fields:
+
+- `teamName`
+- `githubUrl`
+- `demoUrl`
+- `trackHints`
+- `capabilities`
+- `requestedBudget`
+- `transactionId`
+- `topicId`
+- `topicSequenceNumber`
+- `consensusTimestamp`
+
+When `HEDERA_QUEUE_SHARED_SECRET` is configured, callers must send it in the `x-hedera-queue-secret` header.
 
 ---
 
