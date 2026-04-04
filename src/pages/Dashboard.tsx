@@ -22,8 +22,8 @@ export default function Dashboard() {
   const escrowedByToken: Record<string, { symbol: string; total: number; color: string }> = {};
   activeTasks.forEach((t) => {
     const sym = getTokenSymbol(t.paymentToken);
-    const token = Object.values(TOKENS).find(
-      (tk) => tk.address.toLowerCase() === t.paymentToken.toLowerCase()
+    const token = Object.values(TOKENS).find((tk) =>
+      tk.address.toUpperCase() === t.paymentToken.toUpperCase()
     );
     if (!token) return;
     if (!escrowedByToken[sym]) {
@@ -41,7 +41,7 @@ export default function Dashboard() {
           Agent Escrow
         </h1>
         <p className="mt-0.5 text-xs text-muted-foreground font-mono uppercase tracking-wider">
-          ERC-8183 · Arc Testnet · USDC-Native Escrow
+          Hedera Testnet · Operator escrow · HCS audit log
         </p>
       </div>
 
@@ -249,9 +249,7 @@ export default function Dashboard() {
                   <div key={e.id} className="px-4 py-2.5">
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-medium text-foreground">{e.action}</span>
-                      <span className={`text-[8px] font-mono px-1.5 py-0.5 uppercase ${
-                        e.network === "Hedera" ? "bg-accent/15 text-accent" : "bg-primary/15 text-primary"
-                      }`}>
+                      <span className="text-[8px] font-mono px-1.5 py-0.5 uppercase bg-accent/15 text-accent">
                         {e.network}
                       </span>
                     </div>

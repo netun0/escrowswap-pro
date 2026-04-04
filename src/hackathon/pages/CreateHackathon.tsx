@@ -382,7 +382,7 @@ export default function CreateHackathon() {
             <div className="space-y-0.5">
               <p className="text-xs font-medium text-foreground">Lock escrow on start</p>
               <p className="text-[10px] text-muted-foreground">
-                Prize pool auto-locks in the Arc escrow contract when the hackathon begins.
+                Prize pool auto-locks in the Hedera operator escrow when the hackathon begins.
               </p>
             </div>
           </div>

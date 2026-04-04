@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 
 type RoleFilter = "all" | "client" | "worker" | "verifier";
 
-const DEMO_FALLBACK_ADDR = "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38";
+const DEMO_FALLBACK_ADDR = "0.0.1001";
 
 export default function MyTasks() {
   const { tasks } = useEscrow();

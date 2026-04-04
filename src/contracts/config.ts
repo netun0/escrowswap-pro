@@ -1,93 +1,31 @@
-// Arc Testnet — USDC-native L2 by Circle
+// Hedera Testnet — operator escrow + HCS audit (see `server/`)
+
+const usdcTokenId =
+  (import.meta.env.VITE_HEDERA_USDC_TOKEN_ID as string | undefined)?.trim() || "0.0.456858";
+
 export const CHAIN_CONFIG = {
-  chainId: 5042002,
-  chainName: "Arc Testnet",
-  rpcUrl: "https://rpc.testnet.arc.network",
-  blockExplorer: "https://testnet.arcscan.app",
-  nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+  chainId: 296,
+  chainName: "Hedera Testnet",
+  mirrorBase: "https://hashscan.io/testnet",
+  blockExplorer: "https://hashscan.io/testnet",
+  nativeCurrency: { name: "HBAR", symbol: "HBAR", decimals: 8 },
 } as const;
 
-// Contract addresses (set VITE_AGENT_ESCROW_ADDRESS after `npm run deploy:arc`)
-export const CONTRACT_ADDRESSES = {
-  agentEscrow: import.meta.env.VITE_AGENT_ESCROW_ADDRESS ?? "0x0000000000000000000000000000000000000000",
-  uniswapPayout: import.meta.env.VITE_UNISWAP_PAYOUT_ADDRESS ?? "0x0000000000000000000000000000000000000000",
-  x402Relay: import.meta.env.VITE_X402_RELAY_ADDRESS ?? "0x0000000000000000000000000000000000000000",
-  // Canonical Permit2 on Arc Testnet
-  permit2: "0x000000000022D473030F116dDEE9F6B43aC78BA3",
-} as const;
-
-// Tokens on Arc Testnet
+/** Demo HTS / HBAR — `address` is either `HBAR` or a token id `0.0.x` (matches prior Task shape). */
 export const TOKENS: Record<string, { address: string; symbol: string; name: string; decimals: number; logoColor: string }> = {
+  HBAR: {
+    address: "HBAR",
+    symbol: "HBAR",
+    name: "Hbar",
+    decimals: 8,
+    logoColor: "#3ECF8E",
+  },
   USDC: {
-    address: "0x3600000000000000000000000000000000000000",
+    address: usdcTokenId,
     symbol: "USDC",
-    name: "USD Coin",
+    name: "USD Coin (HTS demo)",
     decimals: 6,
     logoColor: "#2775CA",
-  },
-  EURC: {
-    address: "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
-    symbol: "EURC",
-    name: "Euro Coin",
-    decimals: 6,
-    logoColor: "#1A73E8",
-  },
-} as const;
-
-// Cross-chain source tokens (informational only — represent what an agent holds on origin chains)
-export const SOURCE_TOKENS: Record<string, {
-  symbol: string;
-  name: string;
-  chain: string;
-  chainId: number;
-  decimals: number;
-  logoColor: string;
-  bridgeMethod: string;
-}> = {
-  ETH: {
-    symbol: "ETH",
-    name: "Ether",
-    chain: "Ethereum",
-    chainId: 1,
-    decimals: 18,
-    logoColor: "#627EEA",
-    bridgeMethod: "UniswapX + CCTP",
-  },
-  WETH: {
-    symbol: "WETH",
-    name: "Wrapped Ether",
-    chain: "Ethereum",
-    chainId: 1,
-    decimals: 18,
-    logoColor: "#EC4899",
-    bridgeMethod: "UniswapX + CCTP",
-  },
-  "USDC-ETH": {
-    symbol: "USDC",
-    name: "USD Coin (Ethereum)",
-    chain: "Ethereum",
-    chainId: 1,
-    decimals: 6,
-    logoColor: "#2775CA",
-    bridgeMethod: "CCTP",
-  },
-  "ARB-ETH": {
-    symbol: "ETH",
-    name: "Ether (Arbitrum)",
-    chain: "Arbitrum",
-    chainId: 42161,
-    decimals: 18,
-    logoColor: "#28A0F0",
-    bridgeMethod: "UniswapX + CCTP",
-  },
-  "USDC-ARB": {
-    symbol: "USDC",
-    name: "USD Coin (Arbitrum)",
-    chain: "Arbitrum",
-    chainId: 42161,
-    decimals: 6,
-    logoColor: "#2775CA",
-    bridgeMethod: "CCTP",
   },
 } as const;
 
@@ -104,7 +42,6 @@ export const TASK_STATES = [
 
 export type TaskState = (typeof TASK_STATES)[number];
 
-/** Who may call verify on-chain: human wallet, or an autonomous agent-controlled verifier wallet. */
 export type VerifierMode = "human" | "autonomous";
 
 export const VERIFIER_MODE_LABELS: Record<VerifierMode, { title: string; short: string }> = {
@@ -123,7 +60,6 @@ export interface Task {
   client: string;
   worker: string;
   verifier: string;
-  /** Optional at creation: human approves in a wallet, or an AI agent uses the verifier address. */
   verifierMode: VerifierMode;
   specURI: string;
   outputURI: string;
@@ -136,12 +72,11 @@ export interface Task {
   submittedAt: number;
   verifiedAt: number;
   completedAt: number;
-  // User story additions
-  description: string;       // Natural language task description
-  deadline: number;           // Unix timestamp — work must be submitted by this time
-  expiresAt: number;          // Unix timestamp — funds reclaimable after this if no submission
-  maxBudget: number;          // Max budget cap in token units (safety limit)
-  capabilities: string[];     // Tags for worker capability matching
+  description: string;
+  deadline: number;
+  expiresAt: number;
+  maxBudget: number;
+  capabilities: string[];
 }
 
 export interface MicroPayment {
@@ -153,7 +88,7 @@ export interface MicroPayment {
   callHash: string;
   timestamp: number;
   settled: boolean;
-  purpose: string;            // Human-readable reason for micropayment
+  purpose: string;
 }
 
 export interface AuditEvent {
@@ -163,5 +98,5 @@ export interface AuditEvent {
   actor: string;
   timestamp: number;
   txHash: string;
-  network: "Arc" | "Hedera";
+  network: "Hedera";
 }

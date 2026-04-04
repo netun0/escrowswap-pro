@@ -9,11 +9,11 @@ export default function AgentMonitor() {
   const { payments } = useX402();
 
   const agentActivity = [
-    { agent: "0x742d35Cc...bD38", role: "Client", lastAction: "Created job: smart contract audit", time: "2m ago", status: "active" },
-    { agent: "0x8626f694...1199", role: "Worker", lastAction: "Submitted deliverable on Task #1", time: "1h ago", status: "active" },
-    { agent: "0xdD2FD458...44C0", role: "Verifier", lastAction: "Auto-verified Task #2 (tests passed)", time: "6h ago", status: "idle" },
-    { agent: "0xbDA5747b...97E", role: "Worker", lastAction: "Scanning open jobs matching: NLP, python", time: "12h ago", status: "idle" },
-    { agent: "0x2546BcD3...C30", role: "Verifier", lastAction: "Running Slither checks on Task #4", time: "1h ago", status: "active" },
+    { agent: "0.0.10…01", role: "Client", lastAction: "Created job: HCS audit task", time: "2m ago", status: "active" },
+    { agent: "0.0.10…02", role: "Worker", lastAction: "Submitted deliverable on Task #1", time: "1h ago", status: "active" },
+    { agent: "0.0.10…03", role: "Verifier", lastAction: "Auto-verified Task #2 (tests passed)", time: "6h ago", status: "idle" },
+    { agent: "0.0.10…04", role: "Worker", lastAction: "Scanning open jobs matching: NLP, python", time: "12h ago", status: "idle" },
+    { agent: "0.0.10…05", role: "Verifier", lastAction: "Running checks on Task #4", time: "1h ago", status: "active" },
   ];
 
   return (

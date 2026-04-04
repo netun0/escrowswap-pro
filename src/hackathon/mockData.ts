@@ -56,7 +56,7 @@ export const MOCK_HACKATHONS: Hackathon[] = [
         submittedAt: now - 7 * hour,
         status: "scored",
         eligibility: {
-          agentId: "sentinel.arc.eth",
+          agentId: "0.0.61001",
           timestamp: now - 6.5 * hour,
           githubLive: true,
           demoPresent: true,
@@ -65,14 +65,14 @@ export const MOCK_HACKATHONS: Hackathon[] = [
           notes: "All eligibility criteria met. Repo has 47 commits, demo is 4:32.",
         },
         trackFit: {
-          agentId: "trackfit.arc.eth",
+          agentId: "0.0.61002",
           timestamp: now - 6 * hour,
           fit: "high",
           flags: [],
           reasoning: "Project directly addresses autonomous agent coordination with onchain transactions. Strong track alignment.",
         },
         qualityScore: {
-          agentId: "oracle.arc.eth",
+          agentId: "0.0.61003",
           timestamp: now - 5 * hour,
           score: 92,
           reasoning: "Exceptional multi-agent architecture with novel consensus mechanism. Clean code, comprehensive tests, polished demo. Comparable to top ETH Global winners in the agent category.",
@@ -95,7 +95,7 @@ export const MOCK_HACKATHONS: Hackathon[] = [
         submittedAt: now - 8 * hour,
         status: "scored",
         eligibility: {
-          agentId: "sentinel.arc.eth",
+          agentId: "0.0.61001",
           timestamp: now - 7.5 * hour,
           githubLive: true,
           demoPresent: true,
@@ -104,14 +104,14 @@ export const MOCK_HACKATHONS: Hackathon[] = [
           notes: "All criteria met. Contract verified on Sepolia.",
         },
         trackFit: {
-          agentId: "trackfit.arc.eth",
+          agentId: "0.0.61002",
           timestamp: now - 7 * hour,
           fit: "high",
           flags: [],
           reasoning: "Core DeFi yield optimization with novel rebalancing algo. Perfect track fit.",
         },
         qualityScore: {
-          agentId: "oracle.arc.eth",
+          agentId: "0.0.61003",
           timestamp: now - 6 * hour,
           score: 87,
           reasoning: "Strong DeFi mechanics with clean architecture. Solo builder achievement is impressive. Demo could be more polished.",
@@ -134,7 +134,7 @@ export const MOCK_HACKATHONS: Hackathon[] = [
         submittedAt: now - 9 * hour,
         status: "ineligible",
         eligibility: {
-          agentId: "sentinel.arc.eth",
+          agentId: "0.0.61001",
           timestamp: now - 8.5 * hour,
           githubLive: true,
           demoPresent: false,
@@ -160,7 +160,7 @@ export const MOCK_HACKATHONS: Hackathon[] = [
         submittedAt: now - 10 * hour,
         status: "scored",
         eligibility: {
-          agentId: "sentinel.arc.eth",
+          agentId: "0.0.61001",
           timestamp: now - 9.5 * hour,
           githubLive: true,
           demoPresent: true,
@@ -169,14 +169,14 @@ export const MOCK_HACKATHONS: Hackathon[] = [
           notes: "All criteria met. npm package published, docs hosted, 5 usage examples provided.",
         },
         trackFit: {
-          agentId: "trackfit.arc.eth",
+          agentId: "0.0.61002",
           timestamp: now - 9 * hour,
           fit: "high",
           flags: [],
           reasoning: "Developer tooling with published package and extensive docs. Ideal infrastructure track submission.",
         },
         qualityScore: {
-          agentId: "oracle.arc.eth",
+          agentId: "0.0.61003",
           timestamp: now - 8 * hour,
           score: 78,
           reasoning: "Solid infrastructure project. Well-documented but indexing performance could be benchmarked better. Good developer experience.",
@@ -199,7 +199,7 @@ export const MOCK_HACKATHONS: Hackathon[] = [
         submittedAt: now - 7.5 * hour,
         status: "scored",
         eligibility: {
-          agentId: "sentinel.arc.eth",
+          agentId: "0.0.61001",
           timestamp: now - 7 * hour,
           githubLive: true,
           demoPresent: true,
@@ -208,14 +208,14 @@ export const MOCK_HACKATHONS: Hackathon[] = [
           notes: "Criteria met. Smart contract deployed and verified.",
         },
         trackFit: {
-          agentId: "trackfit.arc.eth",
+          agentId: "0.0.61002",
           timestamp: now - 6.5 * hour,
           fit: "medium",
           flags: ["Overlaps with existing tokenized LP solutions"],
           reasoning: "Valid DeFi project but concept has prior art. Differentiation is the secondary market angle.",
         },
         qualityScore: {
-          agentId: "oracle.arc.eth",
+          agentId: "0.0.61003",
           timestamp: now - 5.5 * hour,
           score: 71,
           reasoning: "Competent implementation but limited novelty. Secondary market mechanism is interesting but under-developed in the hackathon timeframe.",
@@ -228,15 +228,15 @@ export const MOCK_HACKATHONS: Hackathon[] = [
     ],
   },
   {
-    id: "arc-builder-sprint",
-    name: "Arc Builder Sprint",
+    id: "hedera-builder-sprint",
+    name: "Hedera Builder Sprint",
     tagline: "48h agent building marathon",
     prizePool: 50000,
     prizeToken: "USDC",
     status: "upcoming",
     escrowLocked: true,
     escrowTxHash: "0xdef789...abc012",
-    organizer: "arc.protocol.eth",
+    organizer: "0.0.60001",
     startsAt: now + 5 * day,
     endsAt: now + 7 * day,
     submissionDeadline: now + 7 * day,
@@ -264,7 +264,7 @@ export const MOCK_HACKATHONS: Hackathon[] = [
 export const MOCK_AGENT_ACTIVITY: AgentActivity[] = [
   {
     id: "act-1",
-    agentName: "sentinel.arc.eth",
+    agentName: "0.0.61001",
     agentRole: "eligibility",
     action: "Checked eligibility for AgentSwarm — PASSED",
     submissionId: "sub-1",
@@ -273,7 +273,7 @@ export const MOCK_AGENT_ACTIVITY: AgentActivity[] = [
   },
   {
     id: "act-2",
-    agentName: "trackfit.arc.eth",
+    agentName: "0.0.61002",
     agentRole: "track-fit",
     action: "Scored track fit for AgentSwarm — HIGH",
     submissionId: "sub-1",
@@ -282,7 +282,7 @@ export const MOCK_AGENT_ACTIVITY: AgentActivity[] = [
   },
   {
     id: "act-3",
-    agentName: "oracle.arc.eth",
+    agentName: "0.0.61003",
     agentRole: "quality",
     action: "Quality scored AgentSwarm — 92/100",
     submissionId: "sub-1",
@@ -291,7 +291,7 @@ export const MOCK_AGENT_ACTIVITY: AgentActivity[] = [
   },
   {
     id: "act-4",
-    agentName: "sentinel.arc.eth",
+    agentName: "0.0.61001",
     agentRole: "eligibility",
     action: "Checked eligibility for ChatSettler — FAILED (no demo)",
     submissionId: "sub-3",
@@ -300,7 +300,7 @@ export const MOCK_AGENT_ACTIVITY: AgentActivity[] = [
   },
   {
     id: "act-5",
-    agentName: "sentinel.arc.eth",
+    agentName: "0.0.61001",
     agentRole: "eligibility",
     action: "Checked eligibility for YieldMorph — PASSED",
     submissionId: "sub-2",
@@ -309,7 +309,7 @@ export const MOCK_AGENT_ACTIVITY: AgentActivity[] = [
   },
   {
     id: "act-6",
-    agentName: "oracle.arc.eth",
+    agentName: "0.0.61003",
     agentRole: "quality",
     action: "Quality scored YieldMorph — 87/100",
     submissionId: "sub-2",
@@ -318,7 +318,7 @@ export const MOCK_AGENT_ACTIVITY: AgentActivity[] = [
   },
   {
     id: "act-7",
-    agentName: "oracle.arc.eth",
+    agentName: "0.0.61003",
     agentRole: "quality",
     action: "Quality scored IndexQL — 78/100",
     submissionId: "sub-4",

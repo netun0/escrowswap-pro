@@ -1,51 +1,59 @@
 import { useState, useCallback, useEffect } from "react";
 import { MOCK_TASKS, MOCK_PAYMENTS } from "@/contracts/mockData";
-import type { Task, MicroPayment, TaskState, VerifierMode } from "@/contracts/config";
-import { ESCROW_USE_MOCK, AGENT_ESCROW_ADDRESS, UNISWAPX_USE_MOCK_ORDER } from "@/contracts/env";
-import {
-  getBrowserProvider,
-  ensureChain,
-  getEscrowContract,
-  fetchTasksFromChain,
-  mapChainTaskToTask,
-  approveTokenForEscrow,
-} from "@/lib/agentEscrowChain";
-import { encodeMockUniswapXOrder } from "@/lib/uniswapx/mockOrder";
+import { type Task, type MicroPayment, type TaskState, type VerifierMode } from "@/contracts/config";
+import { ESCROW_USE_MOCK, HEDERA_API_URL } from "@/contracts/env";
 
 export { ESCROW_USE_MOCK } from "@/contracts/env";
 
+type ApiTask = Omit<Task, "amount"> & { amount: string };
+
+function apiTaskToTask(raw: ApiTask): Task {
+  return { ...raw, amount: BigInt(raw.amount) };
+}
+
+async function apiGetTasks(): Promise<Task[]> {
+  const r = await fetch(`${HEDERA_API_URL}/tasks`);
+  if (!r.ok) throw new Error(await r.text());
+  const data = (await r.json()) as ApiTask[];
+  return data.map(apiTaskToTask);
+}
+
 export function useWallet() {
-  const [address, setAddress] = useState<string | null>(null);
+  const [hederaAccountId, setHederaAccountId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem("hederaClientId");
+  });
   const [connecting, setConnecting] = useState(false);
 
   const connect = useCallback(async () => {
     setConnecting(true);
     try {
-      if (typeof window !== "undefined" && (window as unknown as { ethereum?: { request: (a: unknown) => Promise<unknown> } }).ethereum) {
-        const ethereum = (window as unknown as { ethereum: { request: (a: unknown) => Promise<string[]> } }).ethereum;
-        const accounts = await ethereum.request({
-          method: "eth_requestAccounts",
-        });
-        setAddress(accounts[0]);
-      } else {
-        setAddress("0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38");
+      const input =
+        typeof window !== "undefined"
+          ? window.prompt(
+              "Enter your Hedera account id (0.0.x). Used to enable role-gated actions against the API.",
+              hederaAccountId ?? "0.0.1001",
+            )
+          : null;
+      if (input && /^\d+\.\d+\.\d+$/.test(input.trim())) {
+        const id = input.trim();
+        setHederaAccountId(id);
+        localStorage.setItem("hederaClientId", id);
       }
-    } catch (e) {
-      console.error("Wallet connection failed:", e);
     } finally {
       setConnecting(false);
     }
+  }, [hederaAccountId]);
+
+  const disconnect = useCallback(() => {
+    setHederaAccountId(null);
+    localStorage.removeItem("hederaClientId");
   }, []);
 
-  const disconnect = useCallback(() => setAddress(null), []);
-
-  return { address, connecting, connect, disconnect };
+  return { address: hederaAccountId, connecting, connect, disconnect };
 }
 
 export type AdvanceOptions = {
-  /** For on-chain cross-token verify with mock reactor: exact output amount (wei) paid to worker */
-  uniswapXAmountOutWei?: bigint;
-  /** Deliverable URI for submitWork on-chain */
   outputURI?: string;
 };
 
@@ -59,13 +67,13 @@ export function useEscrow() {
       setTasks(MOCK_TASKS);
       return;
     }
-    if (!AGENT_ESCROW_ADDRESS) {
+    if (!HEDERA_API_URL) {
       setTasks([]);
       return;
     }
     setLoading(true);
     try {
-      const list = await fetchTasksFromChain();
+      const list = await apiGetTasks();
       setTasks(list);
     } catch (e) {
       console.error("fetchTasks", e);
@@ -86,64 +94,87 @@ export function useEscrow() {
       amount: string;
       workerPreferredToken: string;
       deadlineDays?: number;
+      deadlineUnix?: number;
+      clientId?: string;
     }) => {
       if (ESCROW_USE_MOCK) {
-        const days = params.deadlineDays ?? 7;
         const nowSec = Date.now() / 1000;
-        const newTask: Task = {
-          id: tasks.length,
-          client: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
+        const days = params.deadlineDays ?? 7;
+        let deadlineSec: number;
+        let expiresAtSec: number;
+        if (params.deadlineUnix != null && Number.isFinite(params.deadlineUnix) && params.deadlineUnix > nowSec) {
+          deadlineSec = Math.floor(params.deadlineUnix);
+          expiresAtSec = deadlineSec + 86400 * 7;
+        } else {
+          deadlineSec = nowSec + 86400 * days;
+          expiresAtSec = nowSec + 86400 * (days + 7);
+        }
+        const client = params.clientId ?? "0.0.1001";
+        let newId = 0;
+        setTasks((prev) => {
+          newId = prev.length === 0 ? 0 : Math.max(...prev.map((t) => t.id)) + 1;
+          const newTask: Task = {
+            id: newId,
+            client,
+            worker: params.worker,
+            verifier: params.verifier,
+            verifierMode: params.verifierMode,
+            specURI: params.specURI,
+            outputURI: "",
+            paymentToken: params.paymentToken,
+            amount: BigInt(params.amount),
+            workerPreferredToken: params.workerPreferredToken,
+            state: "Open",
+            createdAt: nowSec,
+            fundedAt: 0,
+            submittedAt: 0,
+            verifiedAt: 0,
+            completedAt: 0,
+            description: params.description ?? params.specURI,
+            deadline: deadlineSec,
+            expiresAt: expiresAtSec,
+            maxBudget: 10000,
+            capabilities: [],
+          };
+          return [...prev, newTask];
+        });
+        return newId;
+      }
+
+      if (!HEDERA_API_URL) throw new Error("VITE_HEDERA_API_URL is not set");
+      const clientId = params.clientId?.trim();
+      if (!clientId || !/^\d+\.\d+\.\d+$/.test(clientId)) {
+        throw new Error("Set your Hedera client id in the sidebar before creating a task.");
+      }
+
+      setTxPending(true);
+      try {
+        const body = {
+          clientId,
           worker: params.worker,
           verifier: params.verifier,
           verifierMode: params.verifierMode,
-          specURI: params.specURI,
-          outputURI: "",
-          paymentToken: params.paymentToken,
-          amount: BigInt(params.amount),
-          workerPreferredToken: params.workerPreferredToken,
-          state: "Open",
-          createdAt: nowSec,
-          fundedAt: 0,
-          submittedAt: 0,
-          verifiedAt: 0,
-          completedAt: 0,
+          specURI: params.specURI || params.description || "",
           description: params.description ?? params.specURI,
-          deadline: nowSec + 86400 * days,
-          expiresAt: nowSec + 86400 * (days + 7),
-          maxBudget: 10000,
-          capabilities: [],
+          paymentToken: params.paymentToken,
+          amount: params.amount,
+          workerPreferredToken: params.workerPreferredToken,
+          deadlineUnix: params.deadlineUnix,
         };
-        setTasks((prev) => [...prev, newTask]);
-        return newTask.id;
-      }
-
-      const provider = getBrowserProvider();
-      if (!provider) throw new Error("No wallet");
-      await ensureChain(provider);
-      const signer = await provider.getSigner();
-      const escrow = getEscrowContract(signer);
-      setTxPending(true);
-      try {
-        const before = await escrow.getTaskCount();
-        const tx = await escrow.createTask(
-          params.specURI || params.description || "",
-          params.worker,
-          params.verifier,
-          params.paymentToken,
-          params.amount,
-          params.workerPreferredToken
-        );
-        await tx.wait();
-        const after = await escrow.getTaskCount();
-        if (after <= before) throw new Error("createTask did not increment task count");
-        const taskId = Number(after) - 1;
+        const r = await fetch(`${HEDERA_API_URL}/tasks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error(await r.text());
+        const created = apiTaskToTask((await r.json()) as ApiTask);
         await fetchTasks();
-        return taskId;
+        return created.id;
       } finally {
         setTxPending(false);
       }
     },
-    [fetchTasks]
+    [fetchTasks],
   );
 
   const advanceState = useCallback(
@@ -159,67 +190,63 @@ export function useEscrow() {
               reject: "Refunded",
               dispute: "Disputed",
             };
-            return { ...t, state: stateMap[action] || t.state };
-          })
+            const nextState = stateMap[action] || t.state;
+            const now = Date.now() / 1000;
+            const patch: Partial<Task> = { state: nextState };
+            if (action === "fund") patch.fundedAt = now;
+            if (action === "submit") {
+              patch.submittedAt = now;
+              patch.outputURI = opts?.outputURI ?? `ipfs://deliverable-${Date.now()}`;
+            }
+            if (action === "verify") {
+              patch.verifiedAt = now;
+              patch.completedAt = now;
+            }
+            if (action === "reject") patch.verifiedAt = now;
+            return { ...t, ...patch };
+          }),
         );
         return;
       }
 
-      const provider = getBrowserProvider();
-      if (!provider) throw new Error("No wallet");
-      await ensureChain(provider);
-      const signer = await provider.getSigner();
-      const escrow = getEscrowContract(signer);
-      const task = tasks.find((t) => t.id === taskId);
-      if (!task) throw new Error("Task not found");
+      if (!HEDERA_API_URL) throw new Error("VITE_HEDERA_API_URL is not set");
 
       setTxPending(true);
       try {
         if (action === "fund") {
-          await approveTokenForEscrow(signer, task.paymentToken, task.amount);
-          const tx = await escrow.fundTask(taskId);
-          await tx.wait();
+          const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/fund`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+          if (!r.ok) throw new Error(await r.text());
         } else if (action === "submit") {
-          const uri = opts?.outputURI ?? `ipfs://deliverable-${Date.now()}`;
-          const tx = await escrow.submitWork(taskId, uri);
-          await tx.wait();
+          const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/submit`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ outputURI: opts?.outputURI ?? `ipfs://deliverable-${Date.now()}` }),
+          });
+          if (!r.ok) throw new Error(await r.text());
         } else if (action === "reject") {
-          const tx = await escrow.verify(taskId, false);
-          await tx.wait();
+          const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/verify`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ approved: false }),
+          });
+          if (!r.ok) throw new Error(await r.text());
         } else if (action === "dispute") {
-          const tx = await escrow.dispute(taskId);
-          await tx.wait();
+          const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/dispute`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+          if (!r.ok) throw new Error(await r.text());
         } else if (action === "verify") {
-          const same = task.paymentToken.toLowerCase() === task.workerPreferredToken.toLowerCase();
-          if (same) {
-            const tx = await escrow.verify(taskId, true);
-            await tx.wait();
-          } else {
-            if (!UNISWAPX_USE_MOCK_ORDER) {
-              throw new Error(
-                "Cross-token payout requires VITE_UNISWAPX_USE_MOCK_ORDER=true (mock reactor) or a backend-built UniswapX order for production reactors."
-              );
-            }
-            const payoutAddr: string = await escrow.uniswapPayout();
-            const amountOut = opts?.uniswapXAmountOutWei ?? 1n;
-            const order = encodeMockUniswapXOrder({
-              swapper: payoutAddr,
-              tokenIn: task.paymentToken,
-              amountIn: task.amount,
-              tokenOut: task.workerPreferredToken,
-              recipient: task.worker,
-              amountOut,
-            });
-            const tx = await escrow.verifyWithUniswapXOrder(taskId, true, order, "0x");
-            await tx.wait();
-          }
+          const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/verify`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ approved: true }),
+          });
+          if (!r.ok) throw new Error(await r.text());
         }
         await fetchTasks();
       } finally {
         setTxPending(false);
       }
     },
-    [tasks, fetchTasks]
+    [fetchTasks],
   );
 
   useEffect(() => {
@@ -227,53 +254,6 @@ export function useEscrow() {
   }, [fetchTasks]);
 
   return { tasks, loading, txPending, createTask, advanceState, fetchTasks };
-}
-
-export interface CrossChainQuote {
-  amountOut: string;
-  priceImpact: string;
-  fee: string;
-  sourceChain: string;
-  sourceToken: string;
-  escrowToken: string;
-  bridgeMethod: string;
-  route: string;
-  estimatedTime: string;
-}
-
-export function useUniswapQuote() {
-  const getQuote = useCallback(
-    async (
-      tokenIn: string,
-      tokenOut: string,
-      amountIn: string,
-      sourceChain?: string,
-      bridgeMethod?: string,
-    ): Promise<CrossChainQuote> => {
-      const inAmount = parseFloat(amountIn);
-      const rate = 0.98 + Math.random() * 0.04;
-      const chain = sourceChain ?? "Arc Testnet";
-      const bridge = bridgeMethod ?? "Direct";
-      const isCrossChain = chain !== "Arc Testnet";
-
-      return {
-        amountOut: (inAmount * rate).toFixed(6),
-        priceImpact: (Math.random() * 0.5).toFixed(2),
-        fee: isCrossChain ? "0.05%" : "0.3%",
-        sourceChain: chain,
-        sourceToken: tokenIn,
-        escrowToken: tokenOut,
-        bridgeMethod: bridge,
-        route: isCrossChain
-          ? `${tokenIn} on ${chain} → UniswapX → CCTP → ${tokenOut} on Arc`
-          : `${tokenIn} → ${tokenOut} on Arc`,
-        estimatedTime: isCrossChain ? "~2 min" : "~15 sec",
-      };
-    },
-    []
-  );
-
-  return { getQuote };
 }
 
 export function useX402() {
@@ -284,7 +264,7 @@ export function useX402() {
       if (ESCROW_USE_MOCK) {
         const newPayment: MicroPayment = {
           id: payments.length,
-          payer: "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
+          payer: "0.0.1001",
           provider,
           token,
           amount: BigInt(amount),
@@ -297,7 +277,7 @@ export function useX402() {
         return newPayment.id;
       }
     },
-    [payments.length]
+    [payments.length],
   );
 
   return { payments, payForCall };

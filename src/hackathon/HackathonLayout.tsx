@@ -59,7 +59,7 @@ export function HackathonLayout({ children }: { children: React.ReactNode }) {
             Back to Escrow Dashboard
           </Link>
           <p className="mt-2 text-center text-[9px] font-mono text-muted-foreground uppercase tracking-widest">
-            Powered by Arc
+            Powered by Hedera
           </p>
         </div>
       </aside>

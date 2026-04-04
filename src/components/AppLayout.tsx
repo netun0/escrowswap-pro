@@ -32,7 +32,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             <span className="text-[10px] font-black text-primary-foreground font-mono">E</span>
           </div>
           <div>
-            <h1 className="text-xs font-bold text-foreground tracking-wide">ERC-8183</h1>
+            <h1 className="text-xs font-bold text-foreground tracking-wide">Hedera</h1>
             <p className="text-[9px] text-muted-foreground font-mono">AGENT ESCROW</p>
           </div>
         </div>
@@ -98,11 +98,11 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               disabled={connecting}
             >
               <Wallet className="mr-1.5 h-3 w-3" />
-              {connecting ? "Connecting..." : "Connect Wallet"}
+              {connecting ? "…" : "Hedera client id"}
             </Button>
           )}
           <p className="mt-2 text-center text-[9px] font-mono text-muted-foreground uppercase tracking-widest">
-            Arc Testnet
+            Hedera Testnet
           </p>
         </div>
       </aside>
