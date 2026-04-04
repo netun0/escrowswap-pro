@@ -25,7 +25,7 @@ const agentConfig: Record<AgentRole, { label: string; desc: string; icon: typeof
   },
   quality: {
     label: "Oracle",
-    desc: "LLM trained on every ETH Global winner. Scores 0–100 with reasoning.",
+    desc: "LLM trained on top hackathon winners. Scores 0–100 with reasoning.",
     icon: Sparkles,
     color: "text-[hsl(var(--state-submitted))]",
   },

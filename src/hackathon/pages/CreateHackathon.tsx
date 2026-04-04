@@ -164,7 +164,7 @@ export default function CreateHackathon() {
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="ETH Global SF 2025"
+              placeholder="ChainForge Summit 2025"
               className="bg-background text-sm"
             />
           </div>

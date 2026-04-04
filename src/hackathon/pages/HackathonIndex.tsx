@@ -25,10 +25,10 @@ export default function HackathonIndex() {
       <div className="space-y-3">
         <div className="flex items-center gap-2">
           <Zap className="h-5 w-5 text-accent" />
-          <span className="text-[10px] font-mono text-accent uppercase tracking-widest">Since 1999 — finally upgraded</span>
+          <span className="text-[10px] font-mono text-accent uppercase tracking-widest">Hackathon boost</span>
         </div>
         <h1 className="text-3xl font-black text-foreground tracking-tight">
-          Trustless Hackathon OS
+          JudgeBuddy
         </h1>
         <p className="text-sm text-muted-foreground max-w-2xl leading-relaxed">
           Prize pools locked in escrow. Agent-verified submissions. Automatic USDC payouts.

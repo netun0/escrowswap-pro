@@ -112,7 +112,10 @@ export default function LiveEvent() {
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-bold text-foreground">Agent-Ranked Submissions</h2>
-          <Link to="/hackathon/submissions" className="text-[10px] text-accent hover:underline flex items-center gap-1">
+          <Link
+            to={`/hackathon/submissions?h=${encodeURIComponent(hackathon.id)}`}
+            className="text-[10px] text-accent hover:underline flex items-center gap-1"
+          >
             View all <ChevronRight className="h-3 w-3" />
           </Link>
         </div>
@@ -124,7 +127,7 @@ export default function LiveEvent() {
             .map((sub, idx) => (
               <Link
                 key={sub.id}
-                to={`/hackathon/submissions?id=${sub.id}`}
+                to={`/hackathon/submissions?h=${encodeURIComponent(hackathon.id)}&id=${encodeURIComponent(sub.id)}`}
                 className="block border border-border bg-card p-4 hover:border-accent/40 transition-colors group"
               >
                 <div className="flex items-center gap-4">

@@ -1,5 +1,5 @@
 import { useSearchParams } from "react-router-dom";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MOCK_HACKATHONS } from "../mockData";
 import {
   CheckCircle2,
@@ -18,6 +18,21 @@ import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import type { Hackathon, SimilarityCluster, Submission } from "../types";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+function findHackathonOwningSubmission(submissionId: string): Hackathon | undefined {
+  return MOCK_HACKATHONS.find((h) => h.submissions.some((s) => s.id === submissionId));
+}
+
+function resolveHackathon(searchParams: URLSearchParams): Hackathon {
+  const detailId = searchParams.get("id");
+  if (detailId) {
+    const owner = findHackathonOwningSubmission(detailId);
+    if (owner) return owner;
+  }
+  const h = searchParams.get("h") ?? "";
+  return MOCK_HACKATHONS.find((x) => x.id === h) ?? MOCK_HACKATHONS[0];
+}
 
 function timeAgo(ts: number) {
   const diff = Date.now() / 1000 - ts;
@@ -47,10 +62,11 @@ function FitBadge({ fit }: { fit: "high" | "medium" | "low" }) {
   );
 }
 
-function SubmissionListRow({ sub }: { sub: Submission }) {
+function SubmissionListRow({ sub, hackathonId }: { sub: Submission; hackathonId: string }) {
+  const q = new URLSearchParams({ h: hackathonId, id: sub.id });
   return (
     <Link
-      to={`/hackathon/submissions?id=${sub.id}`}
+      to={`/hackathon/submissions?${q.toString()}`}
       className={cn(
         "block border bg-card p-4 hover:border-accent/40 transition-colors group",
         sub.status === "ineligible" ? "border-destructive/20 opacity-60" : "border-border",
@@ -100,9 +116,11 @@ function SubmissionListRow({ sub }: { sub: Submission }) {
 function ClusterSection({
   cluster,
   subs,
+  hackathonId,
 }: {
   cluster: SimilarityCluster;
   subs: Submission[];
+  hackathonId: string;
 }) {
   const sorted = sortSubmissions(subs);
   if (sorted.length === 0) return null;
@@ -129,21 +147,29 @@ function ClusterSection({
       </div>
       <div className="space-y-2 pl-1 border-l-2 border-violet-500/30">
         {sorted.map((sub) => (
-          <SubmissionListRow key={sub.id} sub={sub} />
+          <SubmissionListRow key={sub.id} sub={sub} hackathonId={hackathonId} />
         ))}
       </div>
     </section>
   );
 }
 
-function SubmissionDetail({ sub, hackathon }: { sub: Submission; hackathon: Hackathon }) {
+function SubmissionDetail({
+  sub,
+  hackathon,
+  listQuery,
+}: {
+  sub: Submission;
+  hackathon: Hackathon;
+  listQuery: string;
+}) {
   const track = hackathon.tracks.find((t) => t.id === sub.trackId);
   const cluster = hackathon.similarityClusters?.find((c) => c.submissionIds.includes(sub.id));
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <Link
-        to="/hackathon/submissions"
+        to={`/hackathon/submissions${listQuery}`}
         className="flex items-center gap-1.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
       >
         <ArrowLeft className="h-3 w-3" /> All submissions
@@ -341,12 +367,41 @@ function SubmissionDetail({ sub, hackathon }: { sub: Submission; hackathon: Hack
   );
 }
 
+function HackathonPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground">Event</p>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger className="h-9 w-full sm:w-[min(100%,20rem)] text-xs">
+          <SelectValue placeholder="Select hackathon" />
+        </SelectTrigger>
+        <SelectContent>
+          {MOCK_HACKATHONS.map((h) => (
+            <SelectItem key={h.id} value={h.id} className="text-xs font-mono">
+              {h.name} ({h.submissions.length})
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
 export default function Submissions() {
-  const [params] = useSearchParams();
-  const hackathon = MOCK_HACKATHONS[0];
+  const [params, setSearchParams] = useSearchParams();
+  const searchKey = params.toString();
+  const hackathon = useMemo(() => resolveHackathon(new URLSearchParams(searchKey)), [searchKey]);
   const selectedId = params.get("id");
   const hasClusters = (hackathon.similarityClusters?.length ?? 0) > 0;
   const [view, setView] = useState<"grouped" | "flat">(() => (hasClusters ? "grouped" : "flat"));
+
+  useEffect(() => {
+    setView(hasClusters ? "grouped" : "flat");
+  }, [hackathon.id, hasClusters]);
+
+  const setHackathonId = (id: string) => {
+    setSearchParams({ h: id });
+  };
 
   const clusteredIds = useMemo(() => {
     const ids = new Set<string>();
@@ -367,15 +422,39 @@ export default function Submissions() {
     return m;
   }, [hackathon.submissions]);
 
+  const listQuery = `?${new URLSearchParams({ h: hackathon.id }).toString()}`;
+
   if (selectedId) {
     const sub = hackathon.submissions.find((s) => s.id === selectedId);
-    if (sub) return <SubmissionDetail sub={sub} hackathon={hackathon} />;
+    if (sub) {
+      return (
+        <div className="max-w-4xl mx-auto space-y-4">
+          <HackathonPicker value={hackathon.id} onChange={setHackathonId} />
+          <SubmissionDetail sub={sub} hackathon={hackathon} listQuery={listQuery} />
+        </div>
+      );
+    }
+    return (
+      <div className="max-w-4xl mx-auto space-y-4">
+        <HackathonPicker value={hackathon.id} onChange={setHackathonId} />
+        <p className="text-sm text-muted-foreground">
+          No submission <span className="font-mono text-foreground">{selectedId}</span> in this event.
+        </p>
+        <Link
+          to={`/hackathon/submissions${listQuery}`}
+          className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="h-3 w-3" /> Back to submissions
+        </Link>
+      </div>
+    );
   }
 
   const sortedFlat = sortSubmissions(hackathon.submissions);
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
+      <HackathonPicker value={hackathon.id} onChange={setHackathonId} />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-xl font-black text-foreground">{hackathon.name} — Submissions</h1>
@@ -391,7 +470,7 @@ export default function Submissions() {
               onClick={() => setView("grouped")}
             >
               <LayoutGrid className="h-3.5 w-3.5" />
-              By theme (AI)
+              By theme
             </Button>
             <Button
               type="button"
@@ -407,10 +486,14 @@ export default function Submissions() {
         )}
       </div>
 
-      {view === "flat" || !hasClusters ? (
+      {hackathon.submissions.length === 0 ? (
+        <p className="rounded-md border border-border bg-muted/20 px-4 py-6 text-center text-sm text-muted-foreground">
+          No submissions for this event yet.
+        </p>
+      ) : view === "flat" || !hasClusters ? (
         <div className="space-y-2">
           {sortedFlat.map((sub) => (
-            <SubmissionListRow key={sub.id} sub={sub} />
+            <SubmissionListRow key={sub.id} sub={sub} hackathonId={hackathon.id} />
           ))}
         </div>
       ) : (
@@ -421,7 +504,9 @@ export default function Submissions() {
           </p>
           {(hackathon.similarityClusters ?? []).map((cluster) => {
             const subs = cluster.submissionIds.map((id) => submissionById.get(id)).filter(Boolean) as Submission[];
-            return <ClusterSection key={cluster.id} cluster={cluster} subs={subs} />;
+            return (
+              <ClusterSection key={cluster.id} cluster={cluster} subs={subs} hackathonId={hackathon.id} />
+            );
           })}
           {ungroupedSubs.length > 0 && (
             <section className="space-y-2">
@@ -429,7 +514,7 @@ export default function Submissions() {
               <p className="text-[10px] text-muted-foreground">Not assigned to a similarity group yet.</p>
               <div className="space-y-2">
                 {sortSubmissions(ungroupedSubs).map((sub) => (
-                  <SubmissionListRow key={sub.id} sub={sub} />
+                  <SubmissionListRow key={sub.id} sub={sub} hackathonId={hackathon.id} />
                 ))}
               </div>
             </section>

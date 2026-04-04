@@ -5,7 +5,6 @@ import { Trophy, LayoutGrid, FileSearch, Bot, ArrowLeft, PlusCircle } from "luci
 const navItems = [
   { path: "/hackathon", label: "Hackathons", icon: LayoutGrid },
   { path: "/hackathon/create", label: "Create Event", icon: PlusCircle },
-  { path: "/hackathon/live", label: "Live Event", icon: Trophy },
   { path: "/hackathon/submissions", label: "Submissions", icon: FileSearch },
   { path: "/hackathon/agents", label: "Agent Pipeline", icon: Bot },
 ];
@@ -21,8 +20,8 @@ export function HackathonLayout({ children }: { children: React.ReactNode }) {
             <Trophy className="h-3.5 w-3.5 text-accent-foreground" />
           </div>
           <div>
-            <h1 className="text-xs font-bold text-foreground tracking-wide">Hackathon OS</h1>
-            <p className="text-[9px] text-muted-foreground font-mono">TRUSTLESS JUDGING</p>
+            <h1 className="text-xs font-bold text-foreground tracking-wide">JudgeBuddy</h1>
+            <p className="text-[9px] text-muted-foreground font-mono">Less painful hackathons</p>
           </div>
         </div>
 

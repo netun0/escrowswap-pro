@@ -71,7 +71,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             )}
           >
             <Trophy className="h-3.5 w-3.5" />
-            Hackathon OS
+            JudgeBuddy
           </Link>
         </nav>
 
