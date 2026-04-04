@@ -1,4 +1,4 @@
-# EscrowSwap Pro
+# JudgeBuddy (EscrowSwap Pro)
 
 **Trust-minimized task escrow on [Hedera](https://hedera.com)** — clients lock **HTS / ERC-20** funds in an on-chain contract; **only the verifier** can release payout to the worker or refund the client. Off-chain orchestration, HCS audit, and a React dashboard tie the flow together.
 
