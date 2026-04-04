@@ -1,5 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { HEDERA_API_URL } from "@/contracts/env";
+import { isHackathonMockup } from "@/hackathon/hackathonEnv";
+import { buildHackathonPayload, type TrackDraft } from "@/hackathon/buildHackathonPayload";
+import { useHackathonList } from "@/hackathon/HackathonListContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,13 +21,6 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
-
-interface TrackDraft {
-  name: string;
-  description: string;
-  prize: string;
-  requirements: string[];
-}
 
 interface EligibilityRule {
   id: string;
@@ -51,6 +48,8 @@ const QUALITY_CRITERIA = [
 
 export default function CreateHackathon() {
   const navigate = useNavigate();
+  const { refetch } = useHackathonList();
+  const [submitting, setSubmitting] = useState(false);
 
   // Basic info
   const [name, setName] = useState("");
@@ -125,12 +124,51 @@ export default function CreateHackathon() {
     );
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!name.trim()) return toast.error("Hackathon name is required");
     if (tracks.some((t) => !t.name.trim() || !t.prize)) return toast.error("All tracks need a name and prize");
     if (totalWeight !== 100) return toast.error(`Quality weights must total 100% (currently ${totalWeight}%)`);
-    toast.success("Hackathon created! Escrow will lock on start date.");
-    navigate("/hackathon");
+
+    if (isHackathonMockup()) {
+      toast.success("Hackathon recorded in mock mode. Set VITE_HACKATHON_MOCKUP=false and VITE_HEDERA_API_URL to persist on the server.");
+      navigate("/hackathon");
+      return;
+    }
+
+    const base = HEDERA_API_URL.replace(/\/$/, "");
+    if (!base) {
+      toast.error("Set VITE_HEDERA_API_URL to save events to hackathons.json on the server.");
+      return;
+    }
+
+    const payload = buildHackathonPayload({
+      name,
+      tagline,
+      startDate,
+      endDate,
+      tracks,
+      autoEscrow,
+    });
+
+    setSubmitting(true);
+    try {
+      const r = await fetch(`${base}/hackathons`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(t || r.statusText);
+      }
+      await refetch();
+      toast.success("Event saved to the server (hackathons.json).");
+      navigate("/hackathon");
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -421,9 +459,13 @@ export default function CreateHackathon() {
             Agents will start processing submissions automatically once the event goes live.
           </p>
         </div>
-        <Button onClick={handleSubmit} className="bg-primary text-primary-foreground font-bold text-xs px-6">
+        <Button
+          onClick={() => void handleSubmit()}
+          disabled={submitting}
+          className="bg-primary text-primary-foreground font-bold text-xs px-6"
+        >
           <Lock className="h-3.5 w-3.5 mr-1.5" />
-          Create & Lock Escrow
+          {submitting ? "Saving…" : "Create & Lock Escrow"}
         </Button>
       </div>
     </div>

@@ -7,6 +7,14 @@ const ESCROW_WRITE_ABI = [
   "function refund(uint256 taskId) external",
 ] as const;
 
+/** Matches `HederaTaskEscrow.tasks` public getter (struct → tuple). */
+const ESCROW_READ_ABI = [
+  "function tasks(uint256 taskId) view returns (address client, address worker, address verifier, address token, uint256 amount, uint8 status)",
+] as const;
+
+/** On-chain `HederaTaskEscrow.Status`: None=0, Funded=1, Released=2, Refunded=3 */
+const ONCHAIN_STATUS = { none: 0, funded: 1, released: 2, refunded: 3 } as const;
+
 const ERC20_ABI = ["function approve(address spender, uint256 amount) external returns (bool)"] as const;
 
 const HTS_TOKEN_ASSOCIATE_ABI = ["function associate() external"] as const;
@@ -115,6 +123,93 @@ function isUserRejected(e: unknown): boolean {
   return m.includes("user rejected") || m.includes("user denied");
 }
 
+function formatEscrowSendError(e: unknown, hint: string): Error {
+  if (isUserRejected(e)) return e instanceof Error ? e : new Error(String(e));
+  const msg = String(
+    (e as { shortMessage?: string; message?: string }).shortMessage ?? (e as Error).message ?? e,
+  );
+  const lower = msg.toLowerCase();
+  if (lower.includes("task exists")) {
+    return new Error(
+      `${hint}: this task id is already on the escrow contract (each id can only be funded once). Use “Sync contract” on the task page if the UI is stale, or create a new task.`,
+    );
+  }
+  if (
+    lower.includes("transferfrom") ||
+    lower.includes("erc20") ||
+    lower.includes("exceeds balance") ||
+    lower.includes("exceeds allowance")
+  ) {
+    return new Error(
+      `${hint}: token transfer failed — confirm allowance covers the amount, you have balance, and the HTS token is associated to your wallet.`,
+    );
+  }
+  if (lower.includes("revert") && lower.includes("data=null")) {
+    return new Error(
+      `${hint}: revert with no decoded reason (common on Hedera). Check HashScan for the tx: input data must be non-empty for fundTask; empty calldata means a plain send to the contract, which always fails.`,
+    );
+  }
+  return new Error(`${hint}. ${msg}`);
+}
+
+async function readEscrowTaskRow(taskId: bigint): Promise<{
+  client: string;
+  worker: string;
+  verifier: string;
+  token: string;
+  amount: bigint;
+  status: number;
+}> {
+  const { contractAddress } = requireEnvEscrow();
+  const escrow = new Contract(contractAddress, ESCROW_READ_ABI, getBrowserProvider());
+  const row = await withRetry(() => escrow.tasks(taskId) as Promise<readonly unknown[]>);
+  return {
+    client: getAddress(String(row[0])),
+    worker: getAddress(String(row[1])),
+    verifier: getAddress(String(row[2])),
+    token: getAddress(String(row[3])),
+    amount: BigInt(String(row[4])),
+    status: Number(row[5]),
+  };
+}
+
+/** Throws if this task id is already used on-chain (cannot fund twice). */
+export async function assertEscrowTaskIsFundable(task: Task): Promise<void> {
+  const row = await readEscrowTaskRow(BigInt(task.id));
+  if (row.status !== ONCHAIN_STATUS.none) {
+    const label =
+      row.status === ONCHAIN_STATUS.funded
+        ? "already funded"
+        : row.status === ONCHAIN_STATUS.released
+          ? "already released (paid out)"
+          : row.status === ONCHAIN_STATUS.refunded
+            ? "already refunded"
+            : `status code ${row.status}`;
+    throw new Error(
+      `Escrow task #${task.id} is not empty on-chain (${label}). fundTask only works once per task id. Sync from the contract or create a new task.`,
+    );
+  }
+}
+
+async function assertAllowanceCoversFund(task: Task): Promise<void> {
+  const { contractAddress } = requireEnvEscrow();
+  if (!task.tokenEvm) throw new Error("Task missing tokenEvm");
+  const provider = getBrowserProvider();
+  const signer = await provider.getSigner();
+  const me = getAddress(await signer.getAddress());
+  const token = new Contract(
+    task.tokenEvm,
+    ["function allowance(address owner, address spender) view returns (uint256)"],
+    provider,
+  );
+  const allowance: bigint = await withRetry(() => token.allowance(me, contractAddress) as Promise<bigint>);
+  if (allowance < task.amount) {
+    throw new Error(
+      `Allowance too low before fundTask: need at least ${task.amount} (smallest units), currently ${allowance}. Finish the approve step first.`,
+    );
+  }
+}
+
 /**
  * Links the signer's Hedera account to the HTS token on the ledger. Required before approve/transferFrom.
  * No-ops safely if the token is already associated (typical empty revert from the precompile).
@@ -194,19 +289,43 @@ export async function approveTokenForEscrow(task: Task): Promise<TransactionResp
   return withRetry(() => token.approve(contractAddress, task.amount, HEDERA_GAS) as Promise<TransactionResponse>);
 }
 
-export async function fundTaskOnChain(task: Task): Promise<import("ethers").TransactionResponse> {
+export async function fundTaskOnChain(task: Task): Promise<TransactionResponse> {
   const { contractAddress } = requireEnvEscrow();
   if (!task.workerEvm || !task.verifierEvm || !task.tokenEvm) {
     throw new Error("Task missing EVM addresses for fundTask");
   }
   await assertFundingWalletIsClient(task);
+  await assertEscrowTaskIsFundable(task);
+  await assertAllowanceCoversFund(task);
+
   const signer = await getBrowserProvider().getSigner();
   const escrow = new Contract(contractAddress, ESCROW_WRITE_ABI, signer);
-  return withRetry(() =>
-    escrow.fundTask(BigInt(task.id), task.workerEvm, task.verifierEvm, task.tokenEvm, task.amount, HEDERA_GAS) as Promise<
-      import("ethers").TransactionResponse
-    >,
-  );
+  const args = [BigInt(task.id), task.workerEvm, task.verifierEvm, task.tokenEvm, task.amount] as const;
+
+  try {
+    await withRetry(() => escrow.fundTask.staticCall(...args));
+  } catch (e: unknown) {
+    throw formatEscrowSendError(e, "fundTask would revert");
+  }
+
+  const populated = await escrow.fundTask.populateTransaction(...args, HEDERA_GAS);
+  if (!populated.data || populated.data === "0x") {
+    throw new Error(
+      "Built fundTask transaction has empty calldata — refusing to send. (Sending 0-byte data to the escrow contract always reverts on Hedera.)",
+    );
+  }
+
+  try {
+    return await withRetry(() =>
+      signer.sendTransaction({
+        to: contractAddress,
+        data: populated.data,
+        gasLimit: HEDERA_GAS.gasLimit,
+      }) as Promise<TransactionResponse>,
+    );
+  } catch (e: unknown) {
+    throw formatEscrowSendError(e, "fundTask send failed");
+  }
 }
 
 export async function releaseOnChain(taskId: number): Promise<import("ethers").TransactionResponse> {

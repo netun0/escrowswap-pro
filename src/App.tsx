@@ -16,6 +16,7 @@ import LiveEvent from "@/hackathon/pages/LiveEvent";
 import Submissions from "@/hackathon/pages/Submissions";
 import AgentPipeline from "@/hackathon/pages/AgentPipeline";
 import CreateHackathon from "@/hackathon/pages/CreateHackathon";
+import SubmitProject from "@/hackathon/pages/SubmitProject";
 
 const queryClient = new QueryClient();
 
@@ -33,6 +34,7 @@ const App = () => (
           <Route path="/agents" element={<AppLayout><AgentMonitor /></AppLayout>} />
           <Route path="/hackathon" element={<HackathonLayout><HackathonIndex /></HackathonLayout>} />
           <Route path="/hackathon/live" element={<HackathonLayout><LiveEvent /></HackathonLayout>} />
+          <Route path="/hackathon/submit" element={<HackathonLayout><SubmitProject /></HackathonLayout>} />
           <Route path="/hackathon/submissions" element={<HackathonLayout><Submissions /></HackathonLayout>} />
           <Route path="/hackathon/agents" element={<HackathonLayout><AgentPipeline /></HackathonLayout>} />
           <Route path="/hackathon/create" element={<HackathonLayout><CreateHackathon /></HackathonLayout>} />

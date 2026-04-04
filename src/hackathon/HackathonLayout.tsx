@@ -1,9 +1,12 @@
 import { Link, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { Trophy, LayoutGrid, FileSearch, Bot, ArrowLeft, PlusCircle } from "lucide-react";
+import { Trophy, LayoutGrid, FileSearch, Bot, ArrowLeft, PlusCircle, Send } from "lucide-react";
+import { HackathonSubmissionsProvider } from "@/hackathon/HackathonSubmissionsContext";
+import { HackathonListProvider } from "@/hackathon/HackathonListContext";
 
 const navItems = [
   { path: "/hackathon", label: "Hackathons", icon: LayoutGrid },
+  { path: "/hackathon/submit", label: "Submit project", icon: Send },
   { path: "/hackathon/create", label: "Create Event", icon: PlusCircle },
   { path: "/hackathon/submissions", label: "Submissions", icon: FileSearch },
   { path: "/hackathon/agents", label: "Agent Pipeline", icon: Bot },
@@ -13,6 +16,8 @@ export function HackathonLayout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
 
   return (
+    <HackathonSubmissionsProvider>
+    <HackathonListProvider>
     <div className="flex min-h-screen">
       <aside className="fixed left-0 top-0 z-40 flex h-screen w-56 flex-col border-r border-border bg-sidebar-background">
         <div className="flex h-14 items-center gap-2 border-b border-sidebar-border px-5">
@@ -65,5 +70,7 @@ export function HackathonLayout({ children }: { children: React.ReactNode }) {
 
       <main className="ml-56 flex-1 p-6">{children}</main>
     </div>
+    </HackathonListProvider>
+    </HackathonSubmissionsProvider>
   );
 }

@@ -1,5 +1,7 @@
+import { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
-import { MOCK_HACKATHONS } from "../mockData";
+import { useHackathonSubmissions } from "../HackathonSubmissionsContext";
+import { useHackathonList } from "../HackathonListContext";
 import { Trophy, Lock, Shield, Clock, Users, CheckCircle2, XCircle, ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -19,7 +21,39 @@ function timeRemaining(ts: number) {
 
 export default function LiveEvent() {
   const [params] = useSearchParams();
-  const hackathon = MOCK_HACKATHONS.find((h) => h.id === params.get("id")) ?? MOCK_HACKATHONS[0];
+  const eventId = params.get("id");
+  const { hackathons, loading, error } = useHackathonList();
+  const { getMergedSubmissions, version } = useHackathonSubmissions();
+  const base = useMemo(() => {
+    if (eventId) return hackathons.find((h) => h.id === eventId);
+    return hackathons[0];
+  }, [eventId, hackathons]);
+
+  const hackathon = useMemo(() => {
+    if (!base) return undefined;
+    return {
+      ...base,
+      submissions: getMergedSubmissions(base.id, base.submissions),
+    };
+  }, [base, getMergedSubmissions, version]);
+
+  if (loading && hackathons.length === 0) {
+    return (
+      <div className="max-w-5xl mx-auto py-16 text-center text-sm text-muted-foreground">Loading event…</div>
+    );
+  }
+
+  if (!hackathon) {
+    return (
+      <div className="max-w-lg mx-auto space-y-3 py-12">
+        <p className="text-sm text-muted-foreground">No event found.</p>
+        {error ? <p className="text-xs text-destructive font-mono">{error}</p> : null}
+        <Link to="/hackathon" className="text-xs font-mono text-accent hover:underline">
+          Back to events
+        </Link>
+      </div>
+    );
+  }
 
   const eligible = hackathon.submissions.filter((s) => s.eligibility?.passed);
   const scored = hackathon.submissions.filter((s) => s.qualityScore);

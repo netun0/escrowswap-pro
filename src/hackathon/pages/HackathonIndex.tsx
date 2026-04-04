@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
-import { MOCK_HACKATHONS } from "../mockData";
+import { useHackathonSubmissions } from "../HackathonSubmissionsContext";
+import { useHackathonList } from "../HackathonListContext";
 import { Trophy, Lock, Clock, Users, ArrowRight, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,29 @@ function formatDate(ts: number) {
 }
 
 export default function HackathonIndex() {
+  const { hackathons, loading, error } = useHackathonList();
+  const { getMergedSubmissions } = useHackathonSubmissions();
+  const submissionTotal = (h: (typeof hackathons)[number]) =>
+    getMergedSubmissions(h.id, h.submissions).length;
+
+  if (loading && hackathons.length === 0) {
+    return (
+      <div className="max-w-5xl mx-auto py-16 text-center text-sm text-muted-foreground">Loading events…</div>
+    );
+  }
+
+  if (!loading && hackathons.length === 0) {
+    return (
+      <div className="max-w-lg mx-auto space-y-4 py-12">
+        <p className="text-sm text-muted-foreground">No hackathon events yet.</p>
+        {error ? <p className="text-xs text-destructive font-mono">{error}</p> : null}
+        <Link to="/hackathon/create" className="inline-flex text-xs font-mono text-accent hover:underline">
+          Create an event
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-5xl mx-auto space-y-8">
       {/* Hero */}
@@ -56,13 +80,17 @@ export default function HackathonIndex() {
       <div className="space-y-3">
         <h2 className="text-sm font-bold text-foreground">Events</h2>
         <div className="space-y-3">
-          {MOCK_HACKATHONS.map((h) => {
+          {hackathons.map((h) => {
             const cfg = statusConfig[h.status];
+            const nSubs = submissionTotal(h);
             return (
-              <Link
+              <div
                 key={h.id}
+                className="border border-border bg-card overflow-hidden hover:border-accent/40 transition-colors group"
+              >
+              <Link
                 to={`/hackathon/live?id=${h.id}`}
-                className="block border border-border bg-card p-5 hover:border-accent/40 transition-colors group"
+                className="block p-5"
               >
                 <div className="flex items-start justify-between">
                   <div className="space-y-2">
@@ -83,7 +111,7 @@ export default function HackathonIndex() {
                       </span>
                       <span className="flex items-center gap-1">
                         <Users className="h-3 w-3" />
-                        {h.submissions.length} submissions
+                        {nSubs} submissions
                       </span>
                       <span className="flex items-center gap-1 font-mono text-muted-foreground">
                         {h.organizer}
@@ -117,6 +145,21 @@ export default function HackathonIndex() {
                   <ArrowRight className="h-3 w-3 text-muted-foreground ml-auto group-hover:text-accent transition-colors" />
                 </div>
               </Link>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border px-5 py-2.5 bg-muted/15 text-[10px]">
+                <Link
+                  to={`/hackathon/submit?h=${encodeURIComponent(h.id)}`}
+                  className="font-mono text-accent hover:underline"
+                >
+                  Submit project
+                </Link>
+                <Link
+                  to={`/hackathon/submissions?h=${encodeURIComponent(h.id)}`}
+                  className="font-mono text-muted-foreground hover:text-foreground"
+                >
+                  Submissions
+                </Link>
+              </div>
+              </div>
             );
           })}
         </div>

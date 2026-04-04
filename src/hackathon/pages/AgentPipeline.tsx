@@ -1,4 +1,5 @@
-import { MOCK_AGENT_ACTIVITY, MOCK_HACKATHONS } from "../mockData";
+import { MOCK_AGENT_ACTIVITY } from "../mockData";
+import { useHackathonList } from "../HackathonListContext";
 import { Bot, CheckCircle2, Shield, Sparkles, ExternalLink, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AgentRole } from "../types";
@@ -64,9 +65,24 @@ function agentProgressClass(role: AgentRole): string {
 }
 
 export default function AgentPipeline() {
-  const hackathon = MOCK_HACKATHONS[0];
-  const totalChecked = hackathon.submissions.filter((s) => s.eligibility).length;
-  const totalScored = hackathon.submissions.filter((s) => s.qualityScore).length;
+  const { hackathons, loading } = useHackathonList();
+  const hackathon = hackathons[0];
+  const totalChecked = hackathon?.submissions.filter((s) => s.eligibility).length ?? 0;
+  const totalScored = hackathon?.submissions.filter((s) => s.qualityScore).length ?? 0;
+
+  if (loading && !hackathon) {
+    return (
+      <div className="max-w-5xl mx-auto py-16 text-center text-sm text-muted-foreground">Loading…</div>
+    );
+  }
+
+  if (!hackathon) {
+    return (
+      <div className="max-w-5xl mx-auto py-12 text-sm text-muted-foreground">
+        No hackathon events loaded. Create one or enable mock data.
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">

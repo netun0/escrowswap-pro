@@ -141,6 +141,9 @@ const escrowDeploymentConfigured = Boolean(ESCROW_CONTRACT_ADDRESS && ESCROW_CON
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Writable task snapshot (default: `server/data/tasks.json`). */
 const STORE_PATH = process.env.TASK_STORE_PATH?.trim() || path.join(__dirname, "..", "data", "tasks.json");
+/** JudgeBuddy events when `VITE_HACKATHON_MOCKUP=false` (default: `server/data/hackathons.json`). */
+const HACKATHON_STORE_PATH =
+  process.env.HACKATHON_STORE_PATH?.trim() || path.join(__dirname, "..", "data", "hackathons.json");
 
 const tasks = new Map<number, StoredTask>();
 const authChallenges = new Map<string, AuthChallenge>();
@@ -182,6 +185,41 @@ function persistStore(): void {
 }
 
 loadStore();
+
+const storedHackathons: Record<string, unknown>[] = [];
+
+function loadHackathonStore(): void {
+  try {
+    const raw = fs.readFileSync(HACKATHON_STORE_PATH, "utf8");
+    const data = JSON.parse(raw) as { hackathons?: unknown[] };
+    storedHackathons.length = 0;
+    if (Array.isArray(data.hackathons)) {
+      for (const h of data.hackathons) {
+        if (h && typeof h === "object") storedHackathons.push(h as Record<string, unknown>);
+      }
+    }
+    console.log(`Loaded ${storedHackathons.length} hackathon(s) from ${HACKATHON_STORE_PATH}`);
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code !== "ENOENT") console.warn("hackathon store load:", err.message);
+  }
+}
+
+function persistHackathonStore(): void {
+  try {
+    const dir = path.dirname(HACKATHON_STORE_PATH);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      HACKATHON_STORE_PATH,
+      JSON.stringify({ hackathons: storedHackathons }, null, 2),
+      "utf8",
+    );
+  } catch (e) {
+    console.error("hackathon store persist failed:", e);
+  }
+}
+
+loadHackathonStore();
 
 function hederaAccountRegex(id: string): boolean {
   return /^\d+\.\d+\.\d+$/.test(id);
@@ -541,6 +579,7 @@ app.get("/health", (_req, res) => {
     dryRun: DRY_RUN,
     escrowContractAddress: escrowDeploymentConfigured ? ESCROW_CONTRACT_ADDRESS : null,
     hederaEvmRpc: HEDERA_EVM_RPC,
+    hackathonStorePath: HACKATHON_STORE_PATH,
     ledgerHints: {
       hcsMessagesNeedTopic: !TOPIC_ID,
       transfersNeedKeysAndNotDryRun: DRY_RUN || !OPERATOR_KEY_RAW,
@@ -701,6 +740,31 @@ app.post("/auth/logout", (req, res) => {
   }
   clearSessionCookie(res);
   res.status(204).end();
+});
+
+app.get("/hackathons", (_req, res) => {
+  res.json([...storedHackathons]);
+});
+
+app.post("/hackathons", (req, res) => {
+  const body = req.body as Record<string, unknown> | null;
+  if (!body || typeof body !== "object") {
+    return res.status(400).json({ error: "JSON body required" });
+  }
+  const id = String(body.id ?? "").trim();
+  const name = String(body.name ?? "").trim();
+  if (!id || !name) {
+    return res.status(400).json({ error: "id and name are required" });
+  }
+  if (!Array.isArray(body.tracks) || body.tracks.length === 0) {
+    return res.status(400).json({ error: "tracks must be a non-empty array" });
+  }
+  if (storedHackathons.some((h) => String(h.id ?? "") === id)) {
+    return res.status(409).json({ error: "A hackathon with this id already exists" });
+  }
+  storedHackathons.push(body);
+  persistHackathonStore();
+  res.status(201).json(body);
 });
 
 app.get("/tasks", (_req, res) => {
@@ -1119,4 +1183,5 @@ app.post("/tasks/:id/onchain-sync", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Hedera escrow API listening on http://localhost:${PORT}`);
   console.log(`Task store: ${STORE_PATH}`);
+  console.log(`Hackathon store: ${HACKATHON_STORE_PATH}`);
 });

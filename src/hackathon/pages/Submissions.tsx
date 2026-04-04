@@ -1,6 +1,8 @@
 import { useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
-import { MOCK_HACKATHONS } from "../mockData";
+import { findHackathonIdForUserSubmission } from "../userSubmissionsStorage";
+import { useHackathonSubmissions } from "../HackathonSubmissionsContext";
+import { useHackathonList } from "../HackathonListContext";
 import {
   CheckCircle2,
   XCircle,
@@ -20,18 +22,22 @@ import type { Hackathon, SimilarityCluster, Submission } from "../types";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-function findHackathonOwningSubmission(submissionId: string): Hackathon | undefined {
-  return MOCK_HACKATHONS.find((h) => h.submissions.some((s) => s.id === submissionId));
+function findHackathonOwningSubmission(submissionId: string, all: Hackathon[]): Hackathon | undefined {
+  const fromList = all.find((h) => h.submissions.some((s) => s.id === submissionId));
+  if (fromList) return fromList;
+  const hid = findHackathonIdForUserSubmission(submissionId);
+  return hid ? all.find((h) => h.id === hid) : undefined;
 }
 
-function resolveHackathon(searchParams: URLSearchParams): Hackathon {
+function resolveHackathon(searchParams: URLSearchParams, all: Hackathon[]): Hackathon | undefined {
+  if (all.length === 0) return undefined;
   const detailId = searchParams.get("id");
   if (detailId) {
-    const owner = findHackathonOwningSubmission(detailId);
+    const owner = findHackathonOwningSubmission(detailId, all);
     if (owner) return owner;
   }
   const h = searchParams.get("h") ?? "";
-  return MOCK_HACKATHONS.find((x) => x.id === h) ?? MOCK_HACKATHONS[0];
+  return all.find((x) => x.id === h) ?? all[0];
 }
 
 function timeAgo(ts: number) {
@@ -367,7 +373,17 @@ function SubmissionDetail({
   );
 }
 
-function HackathonPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+function HackathonPicker({
+  events,
+  value,
+  onChange,
+  submissionCount,
+}: {
+  events: Hackathon[];
+  value: string;
+  onChange: (id: string) => void;
+  submissionCount: (h: Hackathon) => number;
+}) {
   return (
     <div className="space-y-1.5">
       <p className="text-[9px] font-mono uppercase tracking-wider text-muted-foreground">Event</p>
@@ -376,9 +392,9 @@ function HackathonPicker({ value, onChange }: { value: string; onChange: (id: st
           <SelectValue placeholder="Select hackathon" />
         </SelectTrigger>
         <SelectContent>
-          {MOCK_HACKATHONS.map((h) => (
+          {events.map((h) => (
             <SelectItem key={h.id} value={h.id} className="text-xs font-mono">
-              {h.name} ({h.submissions.length})
+              {h.name} ({submissionCount(h)})
             </SelectItem>
           ))}
         </SelectContent>
@@ -390,14 +406,28 @@ function HackathonPicker({ value, onChange }: { value: string; onChange: (id: st
 export default function Submissions() {
   const [params, setSearchParams] = useSearchParams();
   const searchKey = params.toString();
-  const hackathon = useMemo(() => resolveHackathon(new URLSearchParams(searchKey)), [searchKey]);
+  const { hackathons, loading, error, isMock } = useHackathonList();
+  const { getMergedSubmissions, version } = useHackathonSubmissions();
+  const hackathonBase = useMemo(
+    () => resolveHackathon(new URLSearchParams(searchKey), hackathons),
+    [searchKey, hackathons],
+  );
+  const hackathon = useMemo(() => {
+    if (!hackathonBase) return undefined;
+    return {
+      ...hackathonBase,
+      submissions: getMergedSubmissions(hackathonBase.id, hackathonBase.submissions),
+    };
+  }, [hackathonBase, getMergedSubmissions, version]);
   const selectedId = params.get("id");
-  const hasClusters = (hackathon.similarityClusters?.length ?? 0) > 0;
-  const [view, setView] = useState<"grouped" | "flat">(() => (hasClusters ? "grouped" : "flat"));
+  const hasClusters = (hackathon?.similarityClusters?.length ?? 0) > 0;
+  const [view, setView] = useState<"grouped" | "flat">("flat");
 
   useEffect(() => {
-    setView(hasClusters ? "grouped" : "flat");
-  }, [hackathon.id, hasClusters]);
+    if (!hackathon) return;
+    const hc = (hackathon.similarityClusters?.length ?? 0) > 0;
+    setView(hc ? "grouped" : "flat");
+  }, [hackathon?.id, hackathon?.similarityClusters]);
 
   const setHackathonId = (id: string) => {
     setSearchParams({ h: id });
@@ -405,38 +435,87 @@ export default function Submissions() {
 
   const clusteredIds = useMemo(() => {
     const ids = new Set<string>();
+    if (!hackathon) return ids;
     for (const c of hackathon.similarityClusters ?? []) {
       for (const id of c.submissionIds) ids.add(id);
     }
     return ids;
-  }, [hackathon.similarityClusters]);
+  }, [hackathon]);
 
-  const ungroupedSubs = useMemo(
-    () => hackathon.submissions.filter((s) => !clusteredIds.has(s.id)),
-    [hackathon.submissions, clusteredIds],
-  );
+  const ungroupedSubs = useMemo(() => {
+    if (!hackathon) return [];
+    return hackathon.submissions.filter((s) => !clusteredIds.has(s.id));
+  }, [hackathon, clusteredIds]);
 
   const submissionById = useMemo(() => {
     const m = new Map<string, Submission>();
+    if (!hackathon) return m;
     for (const s of hackathon.submissions) m.set(s.id, s);
     return m;
-  }, [hackathon.submissions]);
+  }, [hackathon]);
 
-  const listQuery = `?${new URLSearchParams({ h: hackathon.id }).toString()}`;
+  const listQuery = useMemo(
+    () => (hackathon ? `?${new URLSearchParams({ h: hackathon.id }).toString()}` : "?"),
+    [hackathon],
+  );
+
+  if (loading && hackathons.length === 0) {
+    return (
+      <div className="max-w-5xl mx-auto py-12 text-center text-sm text-muted-foreground">Loading events…</div>
+    );
+  }
+
+  if (!loading && hackathons.length === 0) {
+    return (
+      <div className="max-w-lg mx-auto space-y-3 py-8">
+        <p className="text-sm text-muted-foreground">No hackathon events yet.</p>
+        {!isMock && (
+          <Link
+            to="/hackathon/create"
+            className="inline-flex text-xs font-mono text-accent hover:underline"
+          >
+            Create an event
+          </Link>
+        )}
+        {error ? <p className="text-xs text-destructive font-mono">{error}</p> : null}
+      </div>
+    );
+  }
+
+  if (!hackathon) {
+    return (
+      <div className="max-w-lg mx-auto space-y-2 py-8 text-sm text-muted-foreground">
+        Could not resolve this event.
+        <Link to="/hackathon/submissions" className="block text-xs text-accent hover:underline font-mono">
+          Open submissions
+        </Link>
+      </div>
+    );
+  }
 
   if (selectedId) {
     const sub = hackathon.submissions.find((s) => s.id === selectedId);
     if (sub) {
       return (
         <div className="max-w-4xl mx-auto space-y-4">
-          <HackathonPicker value={hackathon.id} onChange={setHackathonId} />
+          <HackathonPicker
+            events={hackathons}
+            value={hackathon.id}
+            onChange={setHackathonId}
+            submissionCount={(h) => getMergedSubmissions(h.id, h.submissions).length}
+          />
           <SubmissionDetail sub={sub} hackathon={hackathon} listQuery={listQuery} />
         </div>
       );
     }
     return (
       <div className="max-w-4xl mx-auto space-y-4">
-        <HackathonPicker value={hackathon.id} onChange={setHackathonId} />
+        <HackathonPicker
+          events={hackathons}
+          value={hackathon.id}
+          onChange={setHackathonId}
+          submissionCount={(h) => getMergedSubmissions(h.id, h.submissions).length}
+        />
         <p className="text-sm text-muted-foreground">
           No submission <span className="font-mono text-foreground">{selectedId}</span> in this event.
         </p>
@@ -454,7 +533,12 @@ export default function Submissions() {
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <HackathonPicker value={hackathon.id} onChange={setHackathonId} />
+      <HackathonPicker
+        events={hackathons}
+        value={hackathon.id}
+        onChange={setHackathonId}
+        submissionCount={(h) => getMergedSubmissions(h.id, h.submissions).length}
+      />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-xl font-black text-foreground">{hackathon.name} — Submissions</h1>
