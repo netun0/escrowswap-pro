@@ -1,4 +1,4 @@
-import { BrowserProvider, Contract, getAddress, type Eip1193Provider } from "ethers";
+import { BrowserProvider, Contract, Network, getAddress, type Eip1193Provider, type TransactionResponse, type TransactionReceipt } from "ethers";
 import type { Task } from "@/contracts/config";
 
 const ESCROW_WRITE_ABI = [
@@ -27,13 +27,15 @@ function requireEnvEscrow(): { contractAddress: string; rpcUrl: string } {
 }
 
 const HEDERA_TESTNET_CHAIN_HEX = "0x128";
+const HEDERA_TESTNET_CHAIN_ID = 296;
+const HEDERA_TESTNET_NETWORK = Network.from(HEDERA_TESTNET_CHAIN_ID);
 
 function defaultHederaTestnetRpc(): string {
   return (import.meta.env.VITE_HEDERA_EVM_RPC as string | undefined)?.trim() ?? "https://testnet.hashio.io/api";
 }
 
-const RATE_LIMIT_RETRIES = 4;
-const RATE_LIMIT_BASE_MS = 1500;
+const RATE_LIMIT_RETRIES = 5;
+const RATE_LIMIT_BASE_MS = 2000;
 
 function isRateLimited(e: unknown): boolean {
   const msg = String((e as { message?: string }).message ?? e).toLowerCase();
@@ -52,6 +54,28 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
     }
   }
   throw last;
+}
+
+const RECEIPT_POLL_MS = 5_000;
+const RECEIPT_TIMEOUT_MS = 180_000;
+
+/**
+ * Poll for a transaction receipt manually instead of using ethers `.wait()`,
+ * which triggers an aggressive block-number poller that trips Hashio 429.
+ */
+export async function waitForReceipt(tx: TransactionResponse): Promise<TransactionReceipt | null> {
+  const provider = tx.provider;
+  const t0 = Date.now();
+  while (Date.now() - t0 < RECEIPT_TIMEOUT_MS) {
+    try {
+      const receipt = await provider.getTransactionReceipt(tx.hash);
+      if (receipt) return receipt;
+    } catch (e) {
+      if (!isRateLimited(e)) throw e;
+    }
+    await new Promise((r) => setTimeout(r, RECEIPT_POLL_MS));
+  }
+  throw new Error(`Transaction receipt not found after ${RECEIPT_TIMEOUT_MS / 1000}s. Hash: ${tx.hash}`);
 }
 
 /** Switch or add MetaMask / injected wallet to Hedera Testnet (296). Does not require `VITE_ESCROW_CONTRACT_ADDRESS`. */
@@ -96,7 +120,11 @@ export function getBrowserProvider(): BrowserProvider {
     throw new Error("No injected wallet (window.ethereum). Use a browser wallet that supports Hedera EVM.");
   }
   if (_cachedProvider && _cachedEth === ethereum) return _cachedProvider;
-  const provider = new BrowserProvider(ethereum, undefined, { polling: true, pollingInterval: 6000 });
+  const provider = new BrowserProvider(ethereum, HEDERA_TESTNET_CHAIN_ID, {
+    staticNetwork: HEDERA_TESTNET_NETWORK,
+    pollingInterval: 30_000,
+    cacheTimeout: 30_000,
+  });
   _cachedProvider = provider;
   _cachedEth = ethereum;
   return provider;
@@ -146,8 +174,8 @@ export async function associateHtsToken(tokenEvm: string): Promise<void> {
   const signer = await getBrowserProvider().getSigner();
   const token = new Contract(tokenEvm, HTS_TOKEN_ASSOCIATE_ABI, signer);
   try {
-    const tx = await withRetry(() => token.associate(HEDERA_GAS) as Promise<import("ethers").TransactionResponse>);
-    await tx.wait();
+    const tx = await withRetry(() => token.associate(HEDERA_GAS) as Promise<TransactionResponse>);
+    await waitForReceipt(tx);
   } catch (e: unknown) {
     if (isUserRejected(e)) throw e;
     const msg = String((e as { message?: string }).message ?? "").toLowerCase();
