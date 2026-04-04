@@ -21,6 +21,13 @@ import Long from "long";
 import { AgentMode, HederaBuilder, HederaLangchainToolkit } from "hedera-agent-kit";
 import { Contract, JsonRpcProvider, getAddress, verifyMessage } from "ethers";
 import { HEDERA_TASK_ESCROW_ABI, EscrowOnChainStatus } from "./escrowAbi.js";
+import {
+  PROJECT_SEGMENTATION_RESPONSE_SCHEMA,
+  buildProjectSegmentationInstructions,
+  buildProjectSegmentationPrompt,
+  parseProjectSegmentationResult,
+} from "./projectSegmentation.js";
+import type { ProjectSegmentationInput, ProjectSegmentationResult } from "./projectSegmentation.js";
 
 // The server process runs from `/server`, but the shared env file lives at the repo root.
 loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../../.env") });
@@ -111,6 +118,82 @@ type StoredSession = {
   expiresAtMs: number;
 };
 
+type ProjectSegmentationSource = "manual" | "hedera";
+type ProjectSubmissionStatus = "queued" | "processing" | "segmented" | "failed";
+type ProjectSegmentationJobStatus = "queued" | "processing" | "completed" | "failed";
+
+type HederaProjectEvent = Partial<{
+  consensusTimestamp: string;
+  eventType: string;
+  sourceAccountId: string;
+  topicId: string;
+  topicSequenceNumber: string;
+  transactionId: string;
+}>;
+
+type StoredProjectSubmission = {
+  id: string;
+  source: ProjectSegmentationSource;
+  status: ProjectSubmissionStatus;
+  createdAt: number;
+  updatedAt: number;
+  latestJobId: string;
+  project: ProjectSegmentationInput;
+  rawPayload: Record<string, unknown> | null;
+  hedera: HederaProjectEvent | null;
+  segmentation?: ProjectSegmentationResult;
+  error?: string;
+};
+
+type OpenAIUsageSnapshot = {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+};
+
+type StoredProjectSegmentationJob = {
+  id: string;
+  submissionId: string;
+  source: ProjectSegmentationSource;
+  status: ProjectSegmentationJobStatus;
+  createdAt: number;
+  updatedAt: number;
+  startedAt: number;
+  completedAt: number;
+  attempts: number;
+  model: string;
+  openAiResponseId?: string;
+  usage?: OpenAIUsageSnapshot;
+  error?: string;
+};
+
+type OpenAIResponseOutputContentItem = {
+  type?: string;
+  text?: string;
+  refusal?: string;
+};
+
+type OpenAIResponseOutputItem = {
+  type?: string;
+  content?: OpenAIResponseOutputContentItem[];
+};
+
+type OpenAIResponsePayload = {
+  id?: string;
+  status?: string;
+  error?: { message?: string } | null;
+  output?: OpenAIResponseOutputItem[];
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    output_tokens_details?: {
+      reasoning_tokens?: number;
+    };
+  };
+};
+
 function mergeLedgerTx(task: StoredTask, key: keyof NonNullable<StoredTask["ledgerTx"]>, txId: string | null | undefined): void {
   if (!txId) return;
   if (!task.ledgerTx) task.ledgerTx = {};
@@ -141,11 +224,22 @@ const escrowDeploymentConfigured = Boolean(ESCROW_CONTRACT_ADDRESS && ESCROW_CON
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Writable task snapshot (default: `server/data/tasks.json`). */
 const STORE_PATH = process.env.TASK_STORE_PATH?.trim() || path.join(__dirname, "..", "data", "tasks.json");
+const PROJECT_SEGMENTATION_STORE_PATH =
+  process.env.PROJECT_SEGMENTATION_STORE_PATH?.trim() || path.join(__dirname, "..", "data", "project-segmentation.json");
+const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || "").trim();
+const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").trim().replace(/\/+$/, "");
+const OPENAI_SEGMENT_MODEL = (process.env.OPENAI_SEGMENT_MODEL || "gpt-4o-mini").trim();
+const OPENAI_SEGMENT_TIMEOUT_MS = Number(process.env.OPENAI_SEGMENT_TIMEOUT_MS || 45000);
+const OPENAI_SEGMENT_MAX_OUTPUT_TOKENS = Number(process.env.OPENAI_SEGMENT_MAX_OUTPUT_TOKENS || 700);
+const HEDERA_QUEUE_SHARED_SECRET = (process.env.HEDERA_QUEUE_SHARED_SECRET || "").trim();
 
 const tasks = new Map<number, StoredTask>();
 const authChallenges = new Map<string, AuthChallenge>();
 const authSessions = new Map<string, StoredSession>();
+const projectSubmissions = new Map<string, StoredProjectSubmission>();
+const projectSegmentationJobs = new Map<string, StoredProjectSegmentationJob>();
 let nextId = 0;
+let projectSegmentationWorkerRunning = false;
 
 function loadStore(): void {
   try {
@@ -182,6 +276,469 @@ function persistStore(): void {
 }
 
 loadStore();
+
+function loadProjectSegmentationStore(): void {
+  try {
+    const raw = fs.readFileSync(PROJECT_SEGMENTATION_STORE_PATH, "utf8");
+    const data = JSON.parse(raw) as {
+      jobs?: StoredProjectSegmentationJob[];
+      submissions?: StoredProjectSubmission[];
+    };
+
+    projectSubmissions.clear();
+    for (const submission of data.submissions ?? []) {
+      projectSubmissions.set(submission.id, {
+        ...submission,
+        status: submission.status === "processing" ? "queued" : submission.status,
+      });
+    }
+
+    projectSegmentationJobs.clear();
+    for (const job of data.jobs ?? []) {
+      projectSegmentationJobs.set(job.id, {
+        ...job,
+        status: job.status === "processing" ? "queued" : job.status,
+        startedAt: job.status === "processing" ? 0 : job.startedAt,
+      });
+    }
+
+    console.log(`Loaded ${projectSubmissions.size} project submission(s) from ${PROJECT_SEGMENTATION_STORE_PATH}`);
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code !== "ENOENT") console.warn("project segmentation store load:", err.message);
+  }
+}
+
+function persistProjectSegmentationStore(): void {
+  try {
+    const dir = path.dirname(PROJECT_SEGMENTATION_STORE_PATH);
+    fs.mkdirSync(dir, { recursive: true });
+    const payload = {
+      submissions: [...projectSubmissions.values()].sort((a, b) => a.createdAt - b.createdAt),
+      jobs: [...projectSegmentationJobs.values()].sort((a, b) => a.createdAt - b.createdAt),
+    };
+    fs.writeFileSync(PROJECT_SEGMENTATION_STORE_PATH, JSON.stringify(payload, null, 2), "utf8");
+  } catch (e) {
+    console.error("project segmentation store persist failed:", e);
+  }
+}
+
+loadProjectSegmentationStore();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readOptionalStringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readStringArrayValue(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/[,\n]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function readOptionalNumberValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function readTeamNameValue(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item).trim())
+      .filter(Boolean)
+      .slice(0, 6)
+      .join(", ");
+  }
+  return "";
+}
+
+function parseMaybeJsonObjectString(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeProjectSegmentationInput(value: unknown): ProjectSegmentationInput {
+  const body = isRecord(value) ? value : {};
+  const projectName = readOptionalStringValue(body.projectName ?? body.name ?? body.title);
+  const description = readOptionalStringValue(body.description ?? body.summary ?? body.pitch);
+
+  if (!projectName || !description) {
+    throw new Error("projectName and description are required");
+  }
+
+  const metadata =
+    (isRecord(body.metadata) && body.metadata) ||
+    (isRecord(body.context) && body.context) ||
+    (isRecord(body.extra) && body.extra) ||
+    null;
+
+  return {
+    projectName,
+    description,
+    teamName: readTeamNameValue(body.teamName ?? body.team ?? body.submitters ?? body.builders),
+    githubUrl: readOptionalStringValue(body.githubUrl ?? body.repositoryUrl ?? body.repoUrl),
+    demoUrl: readOptionalStringValue(body.demoUrl ?? body.videoUrl ?? body.websiteUrl),
+    trackHints: readStringArrayValue(body.trackHints ?? body.tracks ?? body.trackNames),
+    capabilities: readStringArrayValue(body.capabilities ?? body.tags ?? body.keywords),
+    requestedBudget: readOptionalNumberValue(body.requestedBudget ?? body.prizeRequested ?? body.amount),
+    metadata,
+  };
+}
+
+function extractHederaProjectEvent(body: Record<string, unknown>): HederaProjectEvent | null {
+  const eventType = readOptionalStringValue(body.eventType ?? body.type);
+  const transactionId = readOptionalStringValue(body.transactionId ?? body.txId);
+  const topicId = readOptionalStringValue(body.topicId);
+  const topicSequenceNumber = readOptionalStringValue(body.topicSequenceNumber ?? body.sequenceNumber);
+  const consensusTimestamp = readOptionalStringValue(body.consensusTimestamp ?? body.timestamp);
+  const sourceAccountId = readOptionalStringValue(body.sourceAccountId ?? body.accountId ?? body.sender);
+
+  if (!eventType && !transactionId && !topicId && !topicSequenceNumber && !consensusTimestamp && !sourceAccountId) {
+    return null;
+  }
+
+  return {
+    ...(eventType ? { eventType } : {}),
+    ...(transactionId ? { transactionId } : {}),
+    ...(topicId ? { topicId } : {}),
+    ...(topicSequenceNumber ? { topicSequenceNumber } : {}),
+    ...(consensusTimestamp ? { consensusTimestamp } : {}),
+    ...(sourceAccountId ? { sourceAccountId } : {}),
+  };
+}
+
+function serializeProjectSubmission(submission: StoredProjectSubmission): Record<string, unknown> {
+  return { ...submission };
+}
+
+function serializeProjectSegmentationJob(job: StoredProjectSegmentationJob): Record<string, unknown> {
+  return { ...job };
+}
+
+function buildProjectSegmentationQueueSummary(): Record<string, unknown> {
+  const jobs = [...projectSegmentationJobs.values()];
+  return {
+    openAiConfigured: Boolean(OPENAI_API_KEY),
+    model: OPENAI_SEGMENT_MODEL,
+    submissions: projectSubmissions.size,
+    jobs: jobs.length,
+    queued: jobs.filter((job) => job.status === "queued").length,
+    processing: jobs.filter((job) => job.status === "processing").length,
+    completed: jobs.filter((job) => job.status === "completed").length,
+    failed: jobs.filter((job) => job.status === "failed").length,
+  };
+}
+
+function isOpenAiSegmentationConfigured(): boolean {
+  return Boolean(OPENAI_API_KEY);
+}
+
+function openAiResponsesUrl(): string {
+  return `${OPENAI_BASE_URL}/responses`;
+}
+
+function stripMarkdownCodeFence(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("```")) return trimmed;
+  return trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+}
+
+function extractStructuredContentText(payload: OpenAIResponsePayload): string {
+  const texts: string[] = [];
+
+  for (const item of payload.output ?? []) {
+    if (item.type !== "message" || !Array.isArray(item.content)) continue;
+    for (const content of item.content) {
+      if (content.type === "refusal" && content.refusal?.trim()) {
+        throw new Error(`OpenAI refused to segment the project: ${content.refusal.trim()}`);
+      }
+      if (content.type === "output_text" && content.text?.trim()) {
+        texts.push(content.text);
+      }
+    }
+  }
+
+  if (texts.length === 0) {
+    throw new Error("OpenAI returned no structured output text.");
+  }
+
+  return stripMarkdownCodeFence(texts.join("\n"));
+}
+
+async function callOpenAiProjectSegmentation(
+  submission: StoredProjectSubmission,
+): Promise<{ responseId: string; segmentation: ProjectSegmentationResult; usage?: OpenAIUsageSnapshot }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OPENAI_SEGMENT_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(openAiResponsesUrl(), {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: OPENAI_SEGMENT_MODEL,
+        store: false,
+        max_output_tokens: OPENAI_SEGMENT_MAX_OUTPUT_TOKENS,
+        temperature: 0.2,
+        input: [
+          {
+            role: "system",
+            content: [{ type: "input_text", text: buildProjectSegmentationInstructions() }],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: buildProjectSegmentationPrompt(submission.project, submission.source === "hedera" ? "hedera event" : "manual api"),
+              },
+            ],
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "project_segmentation",
+            strict: true,
+            schema: PROJECT_SEGMENTATION_RESPONSE_SCHEMA,
+          },
+        },
+        metadata: {
+          source: submission.source,
+          submission_id: submission.id,
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const raw = await response.text();
+      const parsed = parseMaybeJsonObjectString(raw);
+      const apiMessage = readOptionalStringValue(parsed?.error && isRecord(parsed.error) ? parsed.error.message : "");
+      throw new Error(apiMessage || `OpenAI API returned ${response.status} ${response.statusText}`);
+    }
+
+    const payload = (await response.json()) as OpenAIResponsePayload;
+    const text = extractStructuredContentText(payload);
+    const parsed = JSON.parse(text) as unknown;
+
+    return {
+      responseId: readOptionalStringValue(payload.id) || "unknown",
+      segmentation: parseProjectSegmentationResult(parsed),
+      usage: payload.usage
+        ? {
+            inputTokens: Number(payload.usage.input_tokens || 0),
+            outputTokens: Number(payload.usage.output_tokens || 0),
+            reasoningTokens: Number(payload.usage.output_tokens_details?.reasoning_tokens || 0),
+            totalTokens: Number(payload.usage.total_tokens || 0),
+          }
+        : undefined,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function findExistingHederaSubmission(event: HederaProjectEvent | null): StoredProjectSubmission | undefined {
+  if (!event) return undefined;
+
+  return [...projectSubmissions.values()].find((submission) => {
+    if (submission.source !== "hedera" || !submission.hedera) return false;
+    if (event.transactionId && submission.hedera.transactionId === event.transactionId) return true;
+    if (
+      event.topicId &&
+      event.topicSequenceNumber &&
+      submission.hedera.topicId === event.topicId &&
+      submission.hedera.topicSequenceNumber === event.topicSequenceNumber
+    ) {
+      return true;
+    }
+    return false;
+  });
+}
+
+function createProjectSegmentationJob(submission: StoredProjectSubmission): StoredProjectSegmentationJob {
+  const now = Date.now() / 1000;
+  return {
+    id: randomUUID(),
+    submissionId: submission.id,
+    source: submission.source,
+    status: "queued",
+    createdAt: now,
+    updatedAt: now,
+    startedAt: 0,
+    completedAt: 0,
+    attempts: 0,
+    model: OPENAI_SEGMENT_MODEL,
+  };
+}
+
+function queueProjectSegmentationSubmission(
+  source: ProjectSegmentationSource,
+  project: ProjectSegmentationInput,
+  rawPayload: Record<string, unknown> | null,
+  hedera: HederaProjectEvent | null,
+): { duplicate: boolean; job: StoredProjectSegmentationJob; submission: StoredProjectSubmission } {
+  if (source === "hedera") {
+    const existing = findExistingHederaSubmission(hedera);
+    if (existing) {
+      const existingJob =
+        projectSegmentationJobs.get(existing.latestJobId) ??
+        [...projectSegmentationJobs.values()]
+          .filter((job) => job.submissionId === existing.id)
+          .sort((a, b) => b.createdAt - a.createdAt)[0];
+
+      if (existingJob) {
+        return { duplicate: true, submission: existing, job: existingJob };
+      }
+    }
+  }
+
+  const submission: StoredProjectSubmission = {
+    id: randomUUID(),
+    source,
+    status: "queued",
+    createdAt: Date.now() / 1000,
+    updatedAt: Date.now() / 1000,
+    latestJobId: "",
+    project,
+    rawPayload,
+    hedera,
+  };
+  const job = createProjectSegmentationJob(submission);
+  submission.latestJobId = job.id;
+  projectSubmissions.set(submission.id, submission);
+  projectSegmentationJobs.set(job.id, job);
+  persistProjectSegmentationStore();
+  void drainProjectSegmentationQueue();
+  return { duplicate: false, submission, job };
+}
+
+function requeueProjectSegmentationSubmission(submission: StoredProjectSubmission): StoredProjectSegmentationJob {
+  const job = createProjectSegmentationJob(submission);
+  submission.status = "queued";
+  submission.updatedAt = Date.now() / 1000;
+  delete submission.error;
+  submission.latestJobId = job.id;
+  projectSubmissions.set(submission.id, submission);
+  projectSegmentationJobs.set(job.id, job);
+  persistProjectSegmentationStore();
+  void drainProjectSegmentationQueue();
+  return job;
+}
+
+// Single-flight worker keeps Hedera-derived events in arrival order.
+async function drainProjectSegmentationQueue(): Promise<void> {
+  if (projectSegmentationWorkerRunning || !isOpenAiSegmentationConfigured()) return;
+
+  projectSegmentationWorkerRunning = true;
+  try {
+    for (;;) {
+      const nextJob = [...projectSegmentationJobs.values()]
+        .filter((job) => job.status === "queued")
+        .sort((a, b) => a.createdAt - b.createdAt)[0];
+
+      if (!nextJob) return;
+
+      const submission = projectSubmissions.get(nextJob.submissionId);
+      if (!submission) {
+        nextJob.status = "failed";
+        nextJob.updatedAt = Date.now() / 1000;
+        nextJob.completedAt = nextJob.updatedAt;
+        nextJob.error = "Submission is missing.";
+        projectSegmentationJobs.set(nextJob.id, nextJob);
+        persistProjectSegmentationStore();
+        continue;
+      }
+
+      const startedAt = Date.now() / 1000;
+      nextJob.status = "processing";
+      nextJob.startedAt = startedAt;
+      nextJob.updatedAt = startedAt;
+      nextJob.attempts += 1;
+      submission.status = "processing";
+      submission.updatedAt = startedAt;
+      delete submission.error;
+      projectSegmentationJobs.set(nextJob.id, nextJob);
+      projectSubmissions.set(submission.id, submission);
+      persistProjectSegmentationStore();
+
+      try {
+        const result = await callOpenAiProjectSegmentation(submission);
+        const completedAt = Date.now() / 1000;
+
+        submission.status = "segmented";
+        submission.updatedAt = completedAt;
+        submission.segmentation = result.segmentation;
+        delete submission.error;
+        projectSubmissions.set(submission.id, submission);
+
+        nextJob.status = "completed";
+        nextJob.updatedAt = completedAt;
+        nextJob.completedAt = completedAt;
+        nextJob.openAiResponseId = result.responseId;
+        nextJob.usage = result.usage;
+        delete nextJob.error;
+        projectSegmentationJobs.set(nextJob.id, nextJob);
+        persistProjectSegmentationStore();
+
+        await appendHcs({
+          type: "project_segmented",
+          submissionId: submission.id,
+          source: submission.source,
+          at: completedAt,
+          primarySegment: result.segmentation.primarySegment,
+          hederaFit: result.segmentation.hederaFit,
+          confidence: result.segmentation.confidence,
+          ...(submission.hedera ? { hedera: submission.hedera } : {}),
+        });
+      } catch (error) {
+        const completedAt = Date.now() / 1000;
+        const message = readErrorMessage(error);
+
+        submission.status = "failed";
+        submission.updatedAt = completedAt;
+        submission.error = message;
+        projectSubmissions.set(submission.id, submission);
+
+        nextJob.status = "failed";
+        nextJob.updatedAt = completedAt;
+        nextJob.completedAt = completedAt;
+        nextJob.error = message;
+        projectSegmentationJobs.set(nextJob.id, nextJob);
+        persistProjectSegmentationStore();
+        console.error(`[segmentation] job ${nextJob.id} failed:`, message);
+      }
+    }
+  } finally {
+    projectSegmentationWorkerRunning = false;
+  }
+}
 
 function hederaAccountRegex(id: string): boolean {
   return /^\d+\.\d+\.\d+$/.test(id);
@@ -314,6 +871,37 @@ function requireTaskRole(
   return session;
 }
 
+function hasValidHederaQueueSecret(req: express.Request): boolean {
+  if (!HEDERA_QUEUE_SHARED_SECRET) return true;
+  return req.get("x-hedera-queue-secret")?.trim() === HEDERA_QUEUE_SHARED_SECRET;
+}
+
+function extractProjectSubmissionRequest(body: unknown): {
+  hedera: HederaProjectEvent | null;
+  project: ProjectSegmentationInput;
+  rawPayload: Record<string, unknown> | null;
+} {
+  const rawBody = isRecord(body) ? body : {};
+  const nestedPayload =
+    (isRecord(rawBody.project) && rawBody.project) ||
+    (isRecord(rawBody.submission) && rawBody.submission) ||
+    (isRecord(rawBody.payload) && rawBody.payload) ||
+    parseMaybeJsonObjectString(rawBody.payload) ||
+    parseMaybeJsonObjectString(rawBody.message) ||
+    rawBody;
+
+  const nestedProject =
+    (isRecord(nestedPayload.project) && nestedPayload.project) ||
+    (isRecord(nestedPayload.submission) && nestedPayload.submission) ||
+    nestedPayload;
+
+  return {
+    hedera: extractHederaProjectEvent(rawBody),
+    project: normalizeProjectSegmentationInput(nestedProject),
+    rawPayload: rawBody,
+  };
+}
+
 function mirrorNodeBaseUrl(network: SupportedNetwork): string {
   return network === "testnet" ? "https://testnet.mirrornode.hedera.com" : "https://mainnet.mirrornode.hedera.com";
 }
@@ -432,7 +1020,8 @@ try {
 const toolkit =
   OPERATOR_ID && OPERATOR_KEY_RAW
     ? new HederaLangchainToolkit({
-        client,
+        // `hedera-agent-kit` currently resolves its own `@hashgraph/sdk` copy.
+        client: client as never,
         configuration: {
           context: { accountId: OPERATOR_ID, mode: AgentMode.AUTONOMOUS },
         },
@@ -457,6 +1046,9 @@ if (!OPERATOR_KEY_RAW || !OPERATOR_ID) {
 if (escrowDeploymentConfigured) {
   console.log(`[escrow] HederaTaskEscrow at ${ESCROW_CONTRACT_ADDRESS} (EVM RPC ${HEDERA_EVM_RPC}). New tasks use on-chain ERC-20 escrow; POST /fund and operator payout on approve are disabled.`);
 }
+if (!isOpenAiSegmentationConfigured()) {
+  console.warn("[segmentation] OPENAI_API_KEY is not set — Hedera project events can be queued, but OpenAI segmentation will not run.");
+}
 
 async function appendHcs(event: Record<string, unknown>): Promise<LedgerSubmitResult> {
   const label = String(event.type ?? "event");
@@ -474,8 +1066,8 @@ async function appendHcs(event: Record<string, unknown>): Promise<LedgerSubmitRe
       message: JSON.stringify(event),
       transactionMemo: label.slice(0, 100),
     });
-    const res = await tx.execute(client);
-    const receipt = await res.getReceipt(client);
+    const res = await tx.execute(client as never);
+    const receipt = await res.getReceipt(client as never);
     const txId = res.transactionId.toString();
     const seq = receipt.topicSequenceNumber?.toString() ?? null;
     console.log(`[ledger] HCS ok ${label} | tx=${txId} | topicSeq=${seq ?? "?"}`);
@@ -528,6 +1120,8 @@ function serializeTask(t: StoredTask): Record<string, unknown> {
   return { ...t };
 }
 
+void drainProjectSegmentationQueue();
+
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
@@ -541,6 +1135,15 @@ app.get("/health", (_req, res) => {
     dryRun: DRY_RUN,
     escrowContractAddress: escrowDeploymentConfigured ? ESCROW_CONTRACT_ADDRESS : null,
     hederaEvmRpc: HEDERA_EVM_RPC,
+    openai: {
+      configured: isOpenAiSegmentationConfigured(),
+      baseUrl: OPENAI_BASE_URL,
+      model: OPENAI_SEGMENT_MODEL,
+    },
+    segmentationQueue: buildProjectSegmentationQueueSummary(),
+    hederaIngestion: {
+      sharedSecretConfigured: Boolean(HEDERA_QUEUE_SHARED_SECRET),
+    },
     ledgerHints: {
       hcsMessagesNeedTopic: !TOPIC_ID,
       transfersNeedKeysAndNotDryRun: DRY_RUN || !OPERATOR_KEY_RAW,
@@ -701,6 +1304,114 @@ app.post("/auth/logout", (req, res) => {
   }
   clearSessionCookie(res);
   res.status(204).end();
+});
+
+app.get("/segmentation/projects", (_req, res) => {
+  res.json({
+    queue: buildProjectSegmentationQueueSummary(),
+    submissions: [...projectSubmissions.values()]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map(serializeProjectSubmission),
+  });
+});
+
+app.get("/segmentation/projects/:id", (req, res) => {
+  const submission = projectSubmissions.get(String(req.params.id));
+  if (!submission) {
+    return res.status(404).json({ error: "Project submission not found" });
+  }
+
+  return res.json({
+    submission: serializeProjectSubmission(submission),
+    jobs: [...projectSegmentationJobs.values()]
+      .filter((job) => job.submissionId === submission.id)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map(serializeProjectSegmentationJob),
+  });
+});
+
+app.get("/segmentation/jobs", (_req, res) => {
+  res.json({
+    queue: buildProjectSegmentationQueueSummary(),
+    jobs: [...projectSegmentationJobs.values()]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map(serializeProjectSegmentationJob),
+  });
+});
+
+app.post("/segmentation/process", (_req, res) => {
+  if (!isOpenAiSegmentationConfigured()) {
+    return res.status(503).json({
+      error: "OPENAI_API_KEY is not configured.",
+      queue: buildProjectSegmentationQueueSummary(),
+    });
+  }
+
+  void drainProjectSegmentationQueue();
+  return res.status(202).json({
+    accepted: true,
+    queue: buildProjectSegmentationQueueSummary(),
+  });
+});
+
+app.post("/segmentation/projects", (req, res) => {
+  try {
+    const { hedera, project, rawPayload } = extractProjectSubmissionRequest(req.body);
+    const queued = queueProjectSegmentationSubmission("manual", project, rawPayload, hedera);
+    return res.status(queued.duplicate ? 200 : 202).json({
+      duplicate: queued.duplicate,
+      submission: serializeProjectSubmission(queued.submission),
+      job: serializeProjectSegmentationJob(queued.job),
+      queue: buildProjectSegmentationQueueSummary(),
+    });
+  } catch (error) {
+    return res.status(400).json({ error: readErrorMessage(error) });
+  }
+});
+
+app.post("/segmentation/projects/:id/requeue", (req, res) => {
+  const submission = projectSubmissions.get(String(req.params.id));
+  if (!submission) {
+    return res.status(404).json({ error: "Project submission not found" });
+  }
+
+  const job = requeueProjectSegmentationSubmission(submission);
+  return res.status(202).json({
+    submission: serializeProjectSubmission(submission),
+    job: serializeProjectSegmentationJob(job),
+    queue: buildProjectSegmentationQueueSummary(),
+  });
+});
+
+app.post("/hedera/project-events", async (req, res) => {
+  if (!hasValidHederaQueueSecret(req)) {
+    return res.status(401).json({ error: "Invalid Hedera queue secret." });
+  }
+
+  try {
+    const { hedera, project, rawPayload } = extractProjectSubmissionRequest(req.body);
+    const queued = queueProjectSegmentationSubmission("hedera", project, rawPayload, hedera);
+
+    if (!queued.duplicate) {
+      await appendHcs({
+        type: "project_segmentation_queued",
+        submissionId: queued.submission.id,
+        source: "hedera",
+        at: queued.submission.createdAt,
+        projectName: project.projectName,
+        ...(hedera ? { hedera } : {}),
+      });
+    }
+
+    return res.status(queued.duplicate ? 200 : 202).json({
+      duplicate: queued.duplicate,
+      submission: serializeProjectSubmission(queued.submission),
+      job: serializeProjectSegmentationJob(queued.job),
+      queue: buildProjectSegmentationQueueSummary(),
+    });
+  } catch (error) {
+    return res.status(400).json({ error: readErrorMessage(error) });
+  }
 });
 
 app.get("/tasks", (_req, res) => {
@@ -1119,4 +1830,8 @@ app.post("/tasks/:id/onchain-sync", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Hedera escrow API listening on http://localhost:${PORT}`);
   console.log(`Task store: ${STORE_PATH}`);
+  console.log(`Project segmentation store: ${PROJECT_SEGMENTATION_STORE_PATH}`);
+  console.log(
+    `[segmentation] OpenAI ${isOpenAiSegmentationConfigured() ? `enabled (${OPENAI_SEGMENT_MODEL})` : "disabled"} via ${OPENAI_BASE_URL}`,
+  );
 });
