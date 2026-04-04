@@ -1,11 +1,11 @@
 {
-  "name": "vite_react_shadcn_ts",
+  "name": "judge-copilot",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:server": "npm run dev --prefix server",
+    "dev:server": "npm --prefix server run dev",
     "dev:all": "concurrently -n web,api -c blue,magenta \"npm run dev\" \"npm run dev:server\"",
     "build": "vite build",
     "build:dev": "vite build --mode development",
