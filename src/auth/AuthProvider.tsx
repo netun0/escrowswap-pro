@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { AlertCircle, Loader2, ShieldCheck, Wallet } from "lucide-react";
+import { BrowserProvider, getAddress } from "ethers";
 
 import {
   buildAuthSignedMessage,
@@ -18,7 +19,9 @@ import {
 import { AuthContext } from "@/auth/context";
 import type { HederaWalletClient, HederaWalletState } from "@/auth/hederaWallet";
 import type { AuthSession, AuthStatus, WalletConnection } from "@/auth/types";
+import { resolveHederaAccountIdFromEvm } from "@/auth/resolveHederaAccount";
 import { ESCROW_USE_MOCK, HEDERA_API_URL } from "@/contracts/env";
+import { ensureHederaTestnetEvmChain, getInjectedEip1193 } from "@/lib/hederaEscrowContract";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -35,17 +38,20 @@ type SessionResponse = {
 };
 
 const AUTH_NETWORK: HederaNetwork = "testnet";
-const AUTH_WALLET_SOURCE: WalletSource = "hashpack";
+const HASHPACK_SOURCE: WalletSource = "hashpack";
+const METAMASK_SOURCE: WalletSource = "metamask";
 const WALLET_CONNECT_CONFIGURED = Boolean((import.meta.env.VITE_WALLETCONNECT_PROJECT_ID as string | undefined)?.trim());
 
-function toWalletConnection(state: HederaWalletState | null, ready: boolean): WalletConnection {
+function toWalletConnection(state: HederaWalletState | null, ready: boolean, sessionUser: AuthenticatedUser | null): WalletConnection {
+  const walletSource: WalletSource =
+    sessionUser?.walletSource ?? (state?.walletName === "MetaMask" ? METAMASK_SOURCE : HASHPACK_SOURCE);
   return {
-    accountId: state?.accountId ?? null,
-    connected: state?.connected ?? false,
-    network: state?.network ?? null,
+    accountId: state?.accountId ?? sessionUser?.accountId ?? null,
+    connected: state?.connected ?? Boolean(sessionUser),
+    network: state?.network ?? sessionUser?.network ?? null,
     ready,
-    walletName: state?.walletName ?? null,
-    walletSource: AUTH_WALLET_SOURCE,
+    walletName: state?.walletName ?? (sessionUser?.walletSource === METAMASK_SOURCE ? "MetaMask" : null),
+    walletSource,
     walletType: state?.walletType ?? null,
   };
 }
@@ -71,7 +77,15 @@ function buildLocalUser(state: HederaWalletState): AuthenticatedUser {
 
   return {
     accountId: state.accountId,
-    walletSource: AUTH_WALLET_SOURCE,
+    walletSource: HASHPACK_SOURCE,
+    network: AUTH_NETWORK,
+  };
+}
+
+function buildLocalMetaMaskUser(accountId: string): AuthenticatedUser {
+  return {
+    accountId,
+    walletSource: METAMASK_SOURCE,
     network: AUTH_NETWORK,
   };
 }
@@ -109,7 +123,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const payload = (await response.json()) as SessionResponse;
-    setUser(payload.authenticated ? payload.user ?? null : null);
+    const nextUser = payload.authenticated ? payload.user ?? null : null;
+    setUser(nextUser);
+    if (nextUser?.walletSource === METAMASK_SOURCE && nextUser.accountId) {
+      setWalletState({
+        accountId: nextUser.accountId,
+        signerAccountId: null,
+        connected: true,
+        network: AUTH_NETWORK,
+        walletName: "MetaMask",
+        walletType: "injected",
+      });
+      setWalletReady(true);
+    } else if (!nextUser) {
+      setWalletState((prev) => (prev?.walletName === "MetaMask" ? null : prev));
+    }
   }, []);
 
   useEffect(() => {
@@ -166,6 +194,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
+    const signingOut = user;
     try {
       if (HEDERA_API_URL && !ESCROW_USE_MOCK) {
         await fetch(`${HEDERA_API_URL}/auth/logout`, {
@@ -178,10 +207,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setAuthError(null);
       setAuthStatus("idle");
       setAuthDialogOpen(false);
-      await clientRef.current?.disconnect().catch(() => undefined);
-      setWalletState(clientRef.current?.getState() ?? null);
+      if (signingOut?.walletSource === METAMASK_SOURCE) {
+        setWalletState(null);
+      } else {
+        await clientRef.current?.disconnect().catch(() => undefined);
+        setWalletState(clientRef.current?.getState() ?? null);
+      }
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (!user || !walletState?.accountId || !walletState.connected) {
@@ -217,7 +250,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const nonceResponse = await fetch(`${HEDERA_API_URL}/auth/nonce`, {
         body: JSON.stringify({
           accountId: connectedWallet.accountId,
-          walletSource: AUTH_WALLET_SOURCE,
+          walletSource: HASHPACK_SOURCE,
           network: AUTH_NETWORK,
         }),
         credentials: "include",
@@ -233,7 +266,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const signedPayload = buildAuthSignedMessage({
         ...challenge,
         accountId: connectedWallet.accountId!,
-        walletSource: AUTH_WALLET_SOURCE,
+        walletSource: HASHPACK_SOURCE,
         network: AUTH_NETWORK,
       });
 
@@ -247,7 +280,98 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           network: AUTH_NETWORK,
           signature,
           signedPayload,
-          walletSource: AUTH_WALLET_SOURCE,
+          walletSource: HASHPACK_SOURCE,
+        }),
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+
+      if (!verifyResponse.ok) {
+        throw new Error(await verifyResponse.text());
+      }
+
+      const payload = (await verifyResponse.json()) as { user: AuthenticatedUser };
+      setUser(payload.user);
+      setAuthStatus("idle");
+      setAuthDialogOpen(false);
+    } catch (error) {
+      setAuthStatus("error");
+      setAuthError(readErrorMessage(error));
+      throw error;
+    }
+  }, []);
+
+  const signInWithMetaMask = useCallback(async () => {
+    try {
+      setAuthError(null);
+      setAuthStatus("connecting");
+      const eth = getInjectedEip1193();
+      if (!eth) {
+        throw new Error("No injected wallet. Install MetaMask (or another EVM wallet with Hedera Testnet).");
+      }
+      await ensureHederaTestnetEvmChain(eth);
+      const provider = new BrowserProvider(eth);
+      const signer = await provider.getSigner();
+      const evm = getAddress(await signer.getAddress());
+      const accountId = await resolveHederaAccountIdFromEvm(evm);
+      if (!accountId) {
+        throw new Error(
+          "Could not map this EVM address to a Hedera account. Use an ECDSA account with an EVM alias (mirror evm_address).",
+        );
+      }
+
+      setWalletReady(true);
+      setWalletState({
+        accountId,
+        signerAccountId: null,
+        connected: true,
+        network: AUTH_NETWORK,
+        walletName: "MetaMask",
+        walletType: "injected",
+      });
+
+      if (!HEDERA_API_URL || ESCROW_USE_MOCK) {
+        setUser(buildLocalMetaMaskUser(accountId));
+        setAuthStatus("idle");
+        setAuthDialogOpen(false);
+        return;
+      }
+
+      setAuthStatus("awaiting_signature");
+      const nonceResponse = await fetch(`${HEDERA_API_URL}/auth/nonce`, {
+        body: JSON.stringify({
+          accountId,
+          walletSource: METAMASK_SOURCE,
+          network: AUTH_NETWORK,
+        }),
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+
+      if (!nonceResponse.ok) {
+        throw new Error(await nonceResponse.text());
+      }
+
+      const challenge = (await nonceResponse.json()) as AuthChallenge;
+      const signedPayload = buildAuthSignedMessage({
+        ...challenge,
+        accountId,
+        walletSource: METAMASK_SOURCE,
+        network: AUTH_NETWORK,
+      });
+      const signature = await signer.signMessage(signedPayload);
+
+      setAuthStatus("verifying");
+      const verifyResponse = await fetch(`${HEDERA_API_URL}/auth/verify`, {
+        body: JSON.stringify({
+          accountId,
+          challengeId: challenge.challengeId,
+          network: AUTH_NETWORK,
+          signature,
+          signedPayload,
+          walletSource: METAMASK_SOURCE,
         }),
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -280,9 +404,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       openAuthDialog,
       refreshSession,
       signIn,
+      signInWithMetaMask,
       signOut,
       user,
-      wallet: toWalletConnection(walletState, walletReady),
+      wallet: toWalletConnection(walletState, walletReady, user),
     }),
     [
       authDialogOpen,
@@ -293,6 +418,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       openAuthDialog,
       refreshSession,
       signIn,
+      signInWithMetaMask,
       signOut,
       user,
       walletReady,
@@ -320,10 +446,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
               <Wallet className="h-4 w-4" />
-              Sign In With HashPack
+              Sign in
             </DialogTitle>
             <DialogDescription>
-              Connect your Hedera Testnet account in HashPack, sign a one-time challenge, and the app will create an authenticated session.
+              Choose <strong>MetaMask</strong> (injected EVM on Hedera chain 296) or <strong>HashPack</strong> via WalletConnect. You
+              will sign a one-time message to open a session with the API.
             </DialogDescription>
           </DialogHeader>
 
@@ -332,7 +459,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               <div className="flex items-center justify-between gap-3">
                 <span className="font-mono uppercase tracking-widest">Wallet</span>
                 <span className="font-medium text-foreground">
-                  {value.wallet.walletName ?? "HashPack"}
+                  {value.wallet.walletName ?? (value.wallet.connected ? "Connected" : "—")}
                 </span>
               </div>
               <div className="mt-2 flex items-center justify-between gap-3">
@@ -351,7 +478,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
             {!WALLET_CONNECT_CONFIGURED && (
               <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] text-amber-700">
-                Set <code className="font-mono text-foreground">VITE_WALLETCONNECT_PROJECT_ID</code> to enable HashPack sign-in.
+                <code className="font-mono text-foreground">VITE_WALLETCONNECT_PROJECT_ID</code> is not set — HashPack sign-in is
+                disabled. Use <strong>MetaMask</strong> or add a Reown project id.
               </div>
             )}
 
@@ -366,7 +494,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
             {authStatus === "awaiting_signature" && (
               <div className="rounded-md border border-primary/20 bg-primary/5 p-3 text-[11px] text-muted-foreground">
-                Approve the sign-in message in HashPack to finish authentication.
+                Approve the sign-in message in your wallet (MetaMask or HashPack) to finish authentication.
               </div>
             )}
 
@@ -382,17 +510,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             )}
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
             <Button variant="ghost" onClick={closeAuthDialog}>
               Close
             </Button>
-            <Button onClick={() => void signIn()} disabled={dialogBusy || !WALLET_CONNECT_CONFIGURED}>
+            <Button
+              type="button"
+              variant="secondary"
+              className="font-mono text-xs"
+              onClick={() => void signInWithMetaMask()}
+              disabled={dialogBusy}
+            >
+              {dialogBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Sign in with MetaMask
+            </Button>
+            <Button type="button" onClick={() => void signIn()} disabled={dialogBusy || !WALLET_CONNECT_CONFIGURED}>
               {dialogBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wallet className="mr-2 h-4 w-4" />}
               {authStatus === "awaiting_signature"
-                ? "Awaiting Signature"
+                ? "Awaiting signature"
                 : authStatus === "verifying"
                   ? "Verifying"
-                  : "Sign In With HashPack"}
+                  : "Sign in with HashPack"}
             </Button>
           </DialogFooter>
         </DialogContent>

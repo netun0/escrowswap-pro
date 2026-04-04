@@ -22,6 +22,7 @@ export type AuthSession = {
   openAuthDialog: () => void;
   refreshSession: () => Promise<void>;
   signIn: () => Promise<void>;
+  signInWithMetaMask: () => Promise<void>;
   signOut: () => Promise<void>;
   user: AuthenticatedUser | null;
   wallet: WalletConnection;

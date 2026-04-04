@@ -19,7 +19,7 @@ import { proto } from "@hiero-ledger/proto";
 import { PublicKey } from "@hiero-ledger/sdk";
 import Long from "long";
 import { AgentMode, HederaBuilder, HederaLangchainToolkit } from "hedera-agent-kit";
-import { Contract, JsonRpcProvider, getAddress } from "ethers";
+import { Contract, JsonRpcProvider, getAddress, verifyMessage } from "ethers";
 import { HEDERA_TASK_ESCROW_ABI, EscrowOnChainStatus } from "./escrowAbi.js";
 
 // The server process runs from `/server`, but the shared env file lives at the repo root.
@@ -87,7 +87,7 @@ type LedgerSubmitResult = {
   error?: string;
 };
 
-type WalletSource = "hashpack";
+type WalletSource = "hashpack" | "metamask";
 type SupportedNetwork = "testnet";
 
 type AuthenticatedUser = {
@@ -192,7 +192,7 @@ function sameAccount(a: string, b: string): boolean {
 }
 
 function isWalletSource(value: unknown): value is WalletSource {
-  return value === "hashpack";
+  return value === "hashpack" || value === "metamask";
 }
 
 function isSupportedNetwork(value: unknown): value is SupportedNetwork {
@@ -290,7 +290,7 @@ function getSessionFromRequest(req: express.Request): StoredSession | null {
 function requireAuthSession(req: express.Request, res: express.Response): StoredSession | null {
   const session = getSessionFromRequest(req);
   if (!session) {
-    res.status(401).json({ error: "Sign in with HashPack first." });
+    res.status(401).json({ error: "Sign in with HashPack or MetaMask first." });
     return null;
   }
   return session;
@@ -560,7 +560,7 @@ app.post("/auth/nonce", (req, res) => {
     return res.status(400).json({ error: "accountId must be a Hedera account id (0.0.x)" });
   }
   if (!isWalletSource(walletSource)) {
-    return res.status(400).json({ error: "walletSource must be hashpack" });
+    return res.status(400).json({ error: "walletSource must be hashpack or metamask" });
   }
   if (!isSupportedNetwork(network)) {
     return res.status(400).json({ error: "network must be testnet" });
@@ -606,7 +606,7 @@ app.post("/auth/verify", async (req, res) => {
     return res.status(400).json({ error: "accountId must be a Hedera account id (0.0.x)" });
   }
   if (!isWalletSource(walletSource)) {
-    return res.status(400).json({ error: "walletSource must be hashpack" });
+    return res.status(400).json({ error: "walletSource must be hashpack or metamask" });
   }
   if (!isSupportedNetwork(network)) {
     return res.status(400).json({ error: "network must be testnet" });
@@ -635,11 +635,32 @@ app.post("/auth/verify", async (req, res) => {
   authChallenges.set(challengeId, challenge);
 
   try {
-    const publicKey = await fetchAccountPublicKey(accountId, network);
-    const valid = verifyHederaSignedMessage(expectedPayload, signature, publicKey);
-    if (!valid) {
-      authChallenges.delete(challengeId);
-      return res.status(401).json({ error: "Signature verification failed." });
+    if (walletSource === "hashpack") {
+      const publicKey = await fetchAccountPublicKey(accountId, network);
+      const valid = verifyHederaSignedMessage(expectedPayload, signature, publicKey);
+      if (!valid) {
+        authChallenges.delete(challengeId);
+        return res.status(401).json({ error: "Signature verification failed." });
+      }
+    } else {
+      const expectedEvm = await mirrorAccountEvm(accountId);
+      if (!expectedEvm) {
+        authChallenges.delete(challengeId);
+        return res.status(400).json({
+          error: "This Hedera account has no mirror evm_address. Use an ECDSA account with an EVM alias.",
+        });
+      }
+      let recovered: string;
+      try {
+        recovered = verifyMessage(expectedPayload, signature);
+      } catch {
+        authChallenges.delete(challengeId);
+        return res.status(401).json({ error: "Invalid EVM signature." });
+      }
+      if (!addrEq(recovered, expectedEvm)) {
+        authChallenges.delete(challengeId);
+        return res.status(401).json({ error: "Wallet EVM address does not match this Hedera account." });
+      }
     }
 
     const user: AuthenticatedUser = { accountId, walletSource, network };
@@ -762,7 +783,7 @@ app.post("/tasks", async (req, res) => {
   let tokenEvm: string | undefined;
   if (escrowDeploymentConfigured) {
     const [ce, we, ve, te] = await Promise.all([
-      mirrorAccountEvm(String(clientId)),
+      mirrorAccountEvm(String(session.user.accountId)),
       mirrorAccountEvm(String(worker)),
       mirrorAccountEvm(String(verifier)),
       mirrorTokenEvm(payTok),

@@ -25,7 +25,7 @@ export function AuthRequiredCta({
         </div>
         <Button size="sm" className="font-semibold" onClick={openAuthDialog} disabled={busy}>
           <Wallet className="mr-2 h-3.5 w-3.5" />
-          Sign In With HashPack
+          Sign in
         </Button>
       </div>
     </div>

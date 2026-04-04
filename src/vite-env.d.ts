@@ -12,6 +12,8 @@ interface ImportMetaEnv {
   readonly VITE_ESCROW_CONTRACT_ADDRESS?: string;
   /** Optional; defaults to Hashio testnet in wallet helper */
   readonly VITE_HEDERA_EVM_RPC?: string;
+  /** Optional Hedera mirror REST base (MetaMask sign-in resolves 0.0.x from EVM address); defaults to testnet mirror */
+  readonly VITE_HEDERA_MIRROR_BASE?: string;
 }
 
 interface ImportMeta {

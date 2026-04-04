@@ -24,8 +24,13 @@ function requireEnvEscrow(): { contractAddress: string; rpcUrl: string } {
 /** Hedera Testnet EVM chain id */
 const HEDERA_TESTNET_CHAIN_HEX = "0x128";
 
-export async function ensureHederaEvmChain(ethereum: Eip1193Provider): Promise<void> {
-  const { rpcUrl } = requireEnvEscrow();
+function defaultHederaTestnetRpc(): string {
+  return (import.meta.env.VITE_HEDERA_EVM_RPC as string | undefined)?.trim() ?? "https://testnet.hashio.io/api";
+}
+
+/** Switch or add MetaMask / injected wallet to Hedera Testnet (296). Does not require `VITE_ESCROW_CONTRACT_ADDRESS`. */
+export async function ensureHederaTestnetEvmChain(ethereum: Eip1193Provider): Promise<void> {
+  const rpcUrl = defaultHederaTestnetRpc();
   try {
     await ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: HEDERA_TESTNET_CHAIN_HEX }] });
   } catch (e: unknown) {
@@ -44,6 +49,11 @@ export async function ensureHederaEvmChain(ethereum: Eip1193Provider): Promise<v
       ],
     });
   }
+}
+
+export async function ensureHederaEvmChain(ethereum: Eip1193Provider): Promise<void> {
+  requireEnvEscrow();
+  await ensureHederaTestnetEvmChain(ethereum);
 }
 
 export function getInjectedEip1193(): Eip1193Provider | undefined {

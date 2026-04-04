@@ -48,12 +48,12 @@ export default function MyTasks() {
         <p className="mt-0.5 text-xs text-muted-foreground font-mono uppercase tracking-wider">
           {authenticated && userAddr
             ? `Default filter “Mine”: jobs where you are client, worker, or verifier · ${shortenAddress(userAddr)}`
-            : "Sign in with HashPack to personalize task filters and role badges."}
+            : "Sign in to personalize task filters and role badges."}
         </p>
       </div>
 
       {!authenticated && (
-        <AuthRequiredCta description="Browse all tasks publicly, or sign in with HashPack to filter the list against your Hedera account." />
+        <AuthRequiredCta description="Browse all tasks publicly, or sign in (MetaMask or HashPack) to filter the list against your Hedera account." />
       )}
 
       {/* Search */}

@@ -92,7 +92,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                   <span className="font-mono text-[10px] text-sidebar-foreground">{shortenAddress(user.accountId)}</span>
                 </div>
                 <p className="text-[9px] text-muted-foreground">
-                  {wallet.walletName ?? "HashPack"} wallet connected to your Hedera account.
+                  {wallet.walletName ?? "Wallet"} connected to your Hedera account.
                 </p>
               </div>
               <Button
@@ -110,7 +110,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               <div className="space-y-1">
                 <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">Identity</p>
                 <p className="text-[10px] text-muted-foreground">
-                  Sign in with HashPack to create tasks and act as client, worker, or verifier.
+                  Sign in with MetaMask or HashPack to create tasks and act as client, worker, or verifier.
                 </p>
               </div>
               <Button
@@ -120,7 +120,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 disabled={busy}
               >
                 {busy ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : <Wallet className="mr-1.5 h-3 w-3" />}
-                {busy ? "Authenticating" : "Sign in with HashPack"}
+                {busy ? "Authenticating" : "Sign in"}
               </Button>
             </div>
           )}

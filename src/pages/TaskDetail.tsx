@@ -128,7 +128,7 @@ export default function TaskDetail() {
   const runTx = async (fn: () => Promise<void>, okTitle: string) => {
     if (!authenticated) {
       openAuthDialog();
-      toast({ title: "Authentication required", description: "Sign in with HashPack before taking task actions." });
+      toast({ title: "Authentication required", description: "Sign in (MetaMask or HashPack) before taking task actions." });
       return;
     }
 
@@ -473,7 +473,7 @@ export default function TaskDetail() {
             <CardTitle className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Actions</CardTitle>
             {!authenticated && (
               <p className="mt-1 font-mono text-[10px] text-muted-foreground">
-                Sign in with HashPack to act as the task client, worker, or verifier.
+                Sign in with MetaMask or HashPack to act as the task client, worker, or verifier.
               </p>
             )}
           </CardHeader>
