@@ -21,6 +21,7 @@ describe("AgentEscrow + UniswapXPayout (Mock UniswapX)", function () {
 
     const AgentEscrow = await ethers.getContractFactory("AgentEscrow");
     const escrow = await AgentEscrow.deploy(await payout.getAddress());
+    await payout.setEscrow(await escrow.getAddress());
 
     const amount = 1_000_000n; // 1 USDC
     const amountOut = ethers.parseEther("0.001");
@@ -100,6 +101,16 @@ describe("AgentEscrow + UniswapXPayout (Mock UniswapX)", function () {
     ).to.emit(escrow, "PayoutCompleted");
 
     expect(await weth.balanceOf(worker.address)).to.equal(amountOut);
+  });
+
+  it("payout only accepts signed-order execution from the configured escrow", async function () {
+    const { payout, usdc, verifier, amount } = await deployFixture();
+
+    await usdc.mint(await payout.getAddress(), amount);
+
+    await expect(
+      payout.connect(verifier).executeSignedOrder(await usdc.getAddress(), amount, verifier.address, { order: "0x", sig: "0x" })
+    ).to.be.revertedWithCustomError(payout, "OnlyEscrow");
   });
 
   it("verify reverts on cross-token without UniswapX path", async function () {

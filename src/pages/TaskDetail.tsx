@@ -13,6 +13,7 @@ import { ArrowLeft, ExternalLink, Copy, ArrowRightLeft, Clock, Shield, AlertTria
 import { toast } from "@/hooks/use-toast";
 import { CHAIN_CONFIG, TOKENS, VERIFIER_MODE_LABELS } from "@/contracts/config";
 import { ESCROW_USE_MOCK, UNISWAPX_USE_MOCK_ORDER } from "@/contracts/env";
+import { getEscrowSettlementSupportNote } from "@/lib/uniswapx/support";
 
 function addressesEqual(a: string | null | undefined, b: string): boolean {
   if (!a) return false;
@@ -91,9 +92,7 @@ export default function TaskDetail() {
         return;
       }
       if (!UNISWAPX_USE_MOCK_ORDER) {
-        throw new Error(
-          "Cross-token on-chain verify needs a UniswapX SignedOrder. Enable VITE_UNISWAPX_USE_MOCK_ORDER=true for Hardhat mock reactor payloads, or integrate a cosigned Dutch order from the SDK/API."
-        );
+        throw new Error(getEscrowSettlementSupportNote());
       }
       const dec = decimalsForTokenAddress(task.workerPreferredToken);
       const outWei = parseUnits(crossMinOutHuman.trim() || "0", dec);
@@ -405,8 +404,7 @@ export default function TaskDetail() {
                 </p>
                 {!UNISWAPX_USE_MOCK_ORDER && (
                   <p className="text-[9px] text-destructive font-mono">
-                    Enable VITE_UNISWAPX_USE_MOCK_ORDER=true for mock stablecoin FX orders, or integrate V2 Dutch signing via
-                    uniswapx-sdk for production FX settlement.
+                    {getEscrowSettlementSupportNote()}
                   </p>
                 )}
               </div>

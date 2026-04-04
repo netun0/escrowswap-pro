@@ -14,7 +14,7 @@ interface IUniswapXPayout {
         bytes sig;
     }
 
-    function executeSignedOrder(address tokenIn, uint256 amountIn, SignedOrder calldata signedOrder)
+    function executeSignedOrder(address tokenIn, uint256 amountIn, address orderSigner, SignedOrder calldata signedOrder)
         external
         payable;
 }
@@ -171,6 +171,7 @@ contract AgentEscrow is IERC8183Escrow {
             uniswapPayout.executeSignedOrder(
                 task.paymentToken,
                 task.amount,
+                msg.sender,
                 IUniswapXPayout.SignedOrder(signedOrder.order, signedOrder.sig)
             );
             task.state = TaskState.PaidOut;

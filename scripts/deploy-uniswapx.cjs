@@ -71,6 +71,10 @@ async function main() {
   await escrow.waitForDeployment();
   console.log("AgentEscrow:", await escrow.getAddress());
 
+  const setEscrowTx = await payout.setEscrow(await escrow.getAddress());
+  await setEscrowTx.wait();
+  console.log("UniswapXPayout escrow caller:", await payout.escrow());
+
   if (isArc) {
     console.log("\n--- Arc Testnet deployment complete ---");
     console.log("Set these in your .env:");

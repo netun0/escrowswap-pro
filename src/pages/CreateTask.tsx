@@ -302,21 +302,25 @@ export default function CreateTask() {
                   className="border border-primary/30 bg-primary/5 p-3 space-y-2"
                 >
                   <p className="text-[10px] font-bold text-primary uppercase tracking-wider">
-                    {isCrossChain ? "UniswapX Cross-Chain Funding Quote" : "UniswapX FX Quote"}
+                    UniswapX Route Check
                   </p>
                   {isCrossChain && (
                     <p className="text-[10px] text-muted-foreground font-mono">
-                      {form.amount} {selectedSource!.symbol} on {selectedSource!.chain} → {quote.amountOut} {form.paymentToken} on Arc
+                      {form.amount} {selectedSource!.symbol} on {selectedSource!.chain} {"->"} {form.paymentToken} on Arc
                     </p>
                   )}
                   <div className="grid grid-cols-4 gap-2 text-xs font-mono text-muted-foreground">
                     <div>
                       <span className="text-[9px] uppercase">Output</span>
-                      <p className="text-foreground">{quote.amountOut} {form.paymentToken}</p>
+                      <p className="text-foreground">
+                        {quote.amountOut === "—" ? quote.amountOut : `${quote.amountOut} ${form.paymentToken}`}
+                      </p>
                     </div>
                     <div>
                       <span className="text-[9px] uppercase">Impact</span>
-                      <p className="text-foreground">{quote.priceImpact}%</p>
+                      <p className="text-foreground">
+                        {quote.priceImpact === "—" ? quote.priceImpact : `${quote.priceImpact}%`}
+                      </p>
                     </div>
                     <div>
                       <span className="text-[9px] uppercase">Fee</span>
@@ -332,6 +336,9 @@ export default function CreateTask() {
                       <p className="text-[9px] text-muted-foreground font-mono">{quote.route}</p>
                     </div>
                   )}
+                  <div className="pt-1 border-t border-primary/20">
+                    <p className="text-[9px] text-muted-foreground leading-relaxed">{quote.note}</p>
+                  </div>
                 </motion.div>
               )}
             </CardContent>

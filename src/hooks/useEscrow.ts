@@ -11,6 +11,7 @@ import {
   approveTokenForEscrow,
 } from "@/lib/agentEscrowChain";
 import { encodeMockUniswapXOrder } from "@/lib/uniswapx/mockOrder";
+import { getCreateTaskQuoteSupportNote, getEscrowSettlementSupportNote } from "@/lib/uniswapx/support";
 
 export { ESCROW_USE_MOCK } from "@/contracts/env";
 
@@ -196,9 +197,7 @@ export function useEscrow() {
             await tx.wait();
           } else {
             if (!UNISWAPX_USE_MOCK_ORDER) {
-              throw new Error(
-                "Cross-token payout requires VITE_UNISWAPX_USE_MOCK_ORDER=true (mock reactor) or a backend-built UniswapX order for production reactors."
-              );
+              throw new Error(getEscrowSettlementSupportNote());
             }
             const payoutAddr: string = await escrow.uniswapPayout();
             const amountOut = opts?.uniswapXAmountOutWei ?? 1n;
@@ -239,6 +238,8 @@ export interface CrossChainQuote {
   bridgeMethod: string;
   route: string;
   estimatedTime: string;
+  status: "unsupported";
+  note: string;
 }
 
 export function useUniswapQuote() {
@@ -250,24 +251,24 @@ export function useUniswapQuote() {
       sourceChain?: string,
       bridgeMethod?: string,
     ): Promise<CrossChainQuote> => {
-      const inAmount = parseFloat(amountIn);
-      const rate = 0.98 + Math.random() * 0.04;
       const chain = sourceChain ?? "Arc Testnet";
       const bridge = bridgeMethod ?? "Direct";
       const isCrossChain = chain !== "Arc Testnet";
 
       return {
-        amountOut: (inAmount * rate).toFixed(6),
-        priceImpact: (Math.random() * 0.5).toFixed(2),
-        fee: isCrossChain ? "0.05%" : "0.3%",
+        amountOut: "—",
+        priceImpact: "—",
+        fee: "Unavailable",
         sourceChain: chain,
         sourceToken: tokenIn,
         escrowToken: tokenOut,
         bridgeMethod: bridge,
         route: isCrossChain
-          ? `${tokenIn} on ${chain} → UniswapX → CCTP → ${tokenOut} on Arc`
-          : `${tokenIn} → ${tokenOut} on Arc`,
-        estimatedTime: isCrossChain ? "~2 min" : "~15 sec",
+          ? `${tokenIn} on ${chain} -> bridge -> ${tokenOut} on Arc`
+          : `${tokenIn} -> ${tokenOut} on Arc`,
+        estimatedTime: "Unavailable",
+        status: "unsupported",
+        note: getCreateTaskQuoteSupportNote(chain, isCrossChain),
       };
     },
     []
