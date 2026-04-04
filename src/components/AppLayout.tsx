@@ -105,12 +105,43 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                 Sign out
               </Button>
             </div>
+          ) : wallet.connected ? (
+            <div className="space-y-3 rounded-md border border-sidebar-border bg-background/40 p-3">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+                    Wallet connected
+                  </span>
+                  <span className="rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[9px] font-mono uppercase tracking-wider text-primary">
+                    {wallet.network ?? "testnet"}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="h-1.5 w-1.5 bg-primary" />
+                  <span className="font-mono text-[10px] text-sidebar-foreground">
+                    {shortenAddress(wallet.accountId ?? wallet.evmAddress ?? "Connected")}
+                  </span>
+                </div>
+                <p className="text-[9px] text-muted-foreground">
+                  {wallet.walletName ?? "Wallet"} is connected. Sign the auth message to finish signing in.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                className="h-8 w-full bg-primary text-[10px] font-semibold text-primary-foreground"
+                onClick={openAuthDialog}
+                disabled={busy}
+              >
+                {busy ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : <Wallet className="mr-1.5 h-3 w-3" />}
+                {busy ? "Authenticating" : "Finish sign-in"}
+              </Button>
+            </div>
           ) : (
             <div className="space-y-3 rounded-md border border-sidebar-border bg-background/40 p-3">
               <div className="space-y-1">
                 <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">Identity</p>
                 <p className="text-[10px] text-muted-foreground">
-                  Sign in with MetaMask or HashPack to create tasks and act as client, worker, or verifier.
+                  Connect a Hedera Testnet wallet to create tasks and act as client, worker, or verifier.
                 </p>
               </div>
               <Button

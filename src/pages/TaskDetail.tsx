@@ -27,6 +27,7 @@ import {
   releaseOnChain,
   refundOnChain,
   getInjectedEip1193,
+  waitForHederaTransaction,
 } from "@/lib/hederaEscrowContract";
 
 function idsEqual(a: string | null | undefined, b: string): boolean {
@@ -128,7 +129,7 @@ export default function TaskDetail() {
   const runTx = async (fn: () => Promise<void>, okTitle: string) => {
     if (!authenticated) {
       openAuthDialog();
-      toast({ title: "Authentication required", description: "Sign in (MetaMask or HashPack) before taking task actions." });
+      toast({ title: "Authentication required", description: "Sign in with your connected wallet before taking task actions." });
       return;
     }
 
@@ -150,35 +151,35 @@ export default function TaskDetail() {
   const runFundOnChain = () =>
     runTx(async () => {
       const eth = getInjectedEip1193();
-      if (!eth) throw new Error("No injected wallet (window.ethereum).");
+      if (!eth) throw new Error("No EVM wallet connected. Sign in with a Hedera Testnet wallet first.");
       if (!task.escrowContract) throw new Error("Not an on-chain escrow task.");
       await ensureHederaEvmChain(eth);
-      const approveTx = await approveTokenForEscrow(task);
-      await approveTx.wait();
+      const approveHash = await approveTokenForEscrow(task);
+      await waitForHederaTransaction(approveHash);
       await assertClientHasTokenBalance(task);
-      const fundTx = await fundTaskOnChain(task);
-      const rec = await fundTx.wait();
-      await syncOnChain(task.id, rec?.hash);
+      const fundHash = await fundTaskOnChain(task);
+      await waitForHederaTransaction(fundHash);
+      await syncOnChain(task.id, fundHash);
     }, "Funded on-chain — escrow locked");
 
   const runReleaseOnChain = () =>
     runTx(async () => {
       const eth = getInjectedEip1193();
-      if (!eth) throw new Error("No injected wallet.");
+      if (!eth) throw new Error("No EVM wallet connected. Sign in with a Hedera Testnet wallet first.");
       await ensureHederaEvmChain(eth);
-      const tx = await releaseOnChain(task.id);
-      const rec = await tx.wait();
-      await syncOnChain(task.id, rec?.hash);
+      const hash = await releaseOnChain(task.id);
+      await waitForHederaTransaction(hash);
+      await syncOnChain(task.id, hash);
     }, "Released — tokens sent to worker");
 
   const runRefundOnChain = () =>
     runTx(async () => {
       const eth = getInjectedEip1193();
-      if (!eth) throw new Error("No injected wallet.");
+      if (!eth) throw new Error("No EVM wallet connected. Sign in with a Hedera Testnet wallet first.");
       await ensureHederaEvmChain(eth);
-      const tx = await refundOnChain(task.id);
-      const rec = await tx.wait();
-      await syncOnChain(task.id, rec?.hash);
+      const hash = await refundOnChain(task.id);
+      await waitForHederaTransaction(hash);
+      await syncOnChain(task.id, hash);
     }, "Refunded — tokens returned to client");
 
   const runSyncOnly = () => runTx(() => syncOnChain(task.id), "Synced with contract");
@@ -473,7 +474,7 @@ export default function TaskDetail() {
             <CardTitle className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Actions</CardTitle>
             {!authenticated && (
               <p className="mt-1 font-mono text-[10px] text-muted-foreground">
-                Sign in with MetaMask or HashPack to act as the task client, worker, or verifier.
+                Sign in with a Hedera Testnet wallet to act as the task client, worker, or verifier.
               </p>
             )}
           </CardHeader>

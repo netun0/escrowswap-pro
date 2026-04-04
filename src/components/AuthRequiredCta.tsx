@@ -10,7 +10,7 @@ export function AuthRequiredCta({
   description: string;
   title?: string;
 }) {
-  const { authStatus, openAuthDialog } = useAuth();
+  const { authStatus, openAuthDialog, wallet } = useAuth();
   const busy = authStatus === "connecting" || authStatus === "awaiting_signature" || authStatus === "verifying";
 
   return (
@@ -25,7 +25,7 @@ export function AuthRequiredCta({
         </div>
         <Button size="sm" className="font-semibold" onClick={openAuthDialog} disabled={busy}>
           <Wallet className="mr-2 h-3.5 w-3.5" />
-          Sign in
+          {wallet.connected ? "Finish sign-in" : "Sign in"}
         </Button>
       </div>
     </div>

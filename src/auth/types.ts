@@ -3,6 +3,7 @@ import type { AuthenticatedUser, HederaNetwork, WalletSource } from "@/auth/auth
 export type WalletConnection = {
   accountId: string | null;
   connected: boolean;
+  evmAddress: string | null;
   network: HederaNetwork | null;
   ready: boolean;
   walletName: string | null;
@@ -22,7 +23,6 @@ export type AuthSession = {
   openAuthDialog: () => void;
   refreshSession: () => Promise<void>;
   signIn: () => Promise<void>;
-  signInWithMetaMask: () => Promise<void>;
   signOut: () => Promise<void>;
   user: AuthenticatedUser | null;
   wallet: WalletConnection;

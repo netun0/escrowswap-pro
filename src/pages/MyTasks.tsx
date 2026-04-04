@@ -53,7 +53,7 @@ export default function MyTasks() {
       </div>
 
       {!authenticated && (
-        <AuthRequiredCta description="Browse all tasks publicly, or sign in (MetaMask or HashPack) to filter the list against your Hedera account." />
+        <AuthRequiredCta description="Browse all tasks publicly, or sign in with your connected wallet to filter the list against your Hedera account." />
       )}
 
       {/* Search */}

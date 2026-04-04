@@ -1,4 +1,4 @@
-import { BrowserProvider, Contract, getAddress, type Eip1193Provider } from "ethers";
+import { BrowserProvider, Contract, Interface, JsonRpcProvider, getAddress, type Eip1193Provider } from "ethers";
 import type { Task } from "@/contracts/config";
 
 const ESCROW_WRITE_ABI = [
@@ -27,6 +27,10 @@ function requireEnvEscrow(): { contractAddress: string; rpcUrl: string } {
 }
 
 const HEDERA_TESTNET_CHAIN_HEX = "0x128";
+const HEDERA_TESTNET_CHAIN_CAIP = "eip155:296";
+const HEDERA_TESTNET_CHAIN_ID = 296;
+const TX_RECEIPT_POLL_MS = 2500;
+const TX_RECEIPT_TIMEOUT_MS = 180_000;
 
 function defaultHederaTestnetRpc(): string {
   return (import.meta.env.VITE_HEDERA_EVM_RPC as string | undefined)?.trim() ?? "https://testnet.hashio.io/api";
@@ -54,7 +58,7 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
   throw last;
 }
 
-/** Switch or add MetaMask / injected wallet to Hedera Testnet (296). Does not require `VITE_ESCROW_CONTRACT_ADDRESS`. */
+/** Switch or add the connected EVM wallet to Hedera Testnet (296). Does not require `VITE_ESCROW_CONTRACT_ADDRESS`. */
 export async function ensureHederaTestnetEvmChain(ethereum: Eip1193Provider): Promise<void> {
   const rpcUrl = defaultHederaTestnetRpc();
   try {
@@ -75,6 +79,10 @@ export async function ensureHederaTestnetEvmChain(ethereum: Eip1193Provider): Pr
       ],
     });
   }
+
+  if ("setDefaultChain" in ethereum && typeof ethereum.setDefaultChain === "function") {
+    ethereum.setDefaultChain(HEDERA_TESTNET_CHAIN_CAIP);
+  }
 }
 
 export async function ensureHederaEvmChain(ethereum: Eip1193Provider): Promise<void> {
@@ -82,23 +90,47 @@ export async function ensureHederaEvmChain(ethereum: Eip1193Provider): Promise<v
   await ensureHederaTestnetEvmChain(ethereum);
 }
 
-export function getInjectedEip1193(): Eip1193Provider | undefined {
+export function getWindowInjectedEip1193(): Eip1193Provider | undefined {
   const g = globalThis as typeof globalThis & { ethereum?: Eip1193Provider };
   return g.ethereum;
 }
 
+export function getInjectedEip1193(): Eip1193Provider | undefined {
+  if (_preferredEip1193) return _preferredEip1193;
+  return getWindowInjectedEip1193();
+}
+
 let _cachedProvider: BrowserProvider | null = null;
 let _cachedEth: Eip1193Provider | null = null;
+let _preferredEip1193: Eip1193Provider | null = null;
+let _cachedRpcProvider: JsonRpcProvider | null = null;
+let _cachedRpcUrl: string | null = null;
+
+export function setPreferredEip1193(provider: Eip1193Provider | null): void {
+  if (_preferredEip1193 === provider) return;
+  _preferredEip1193 = provider;
+  _cachedProvider = null;
+  _cachedEth = null;
+}
 
 export function getBrowserProvider(): BrowserProvider {
   const ethereum = getInjectedEip1193();
   if (!ethereum) {
-    throw new Error("No injected wallet (window.ethereum). Use a browser wallet that supports Hedera EVM.");
+    throw new Error("No EVM wallet connected. Sign in with a Hedera Testnet wallet first.");
   }
   if (_cachedProvider && _cachedEth === ethereum) return _cachedProvider;
-  const provider = new BrowserProvider(ethereum, undefined, { polling: true, pollingInterval: 6000 });
+  const provider = new BrowserProvider(ethereum);
   _cachedProvider = provider;
   _cachedEth = ethereum;
+  return provider;
+}
+
+function getRpcProvider(): JsonRpcProvider {
+  const rpcUrl = defaultHederaTestnetRpc();
+  if (_cachedRpcProvider && _cachedRpcUrl === rpcUrl) return _cachedRpcProvider;
+  const provider = new JsonRpcProvider(rpcUrl, HEDERA_TESTNET_CHAIN_ID, { staticNetwork: true });
+  _cachedRpcProvider = provider;
+  _cachedRpcUrl = rpcUrl;
   return provider;
 }
 
@@ -130,10 +162,9 @@ export async function assertFundingWalletIsClient(task: Task): Promise<void> {
 
 export async function assertClientHasTokenBalance(task: Task): Promise<void> {
   if (!task.tokenEvm) throw new Error("Task missing tokenEvm");
-  const provider = getBrowserProvider();
-  const signer = await provider.getSigner();
+  const signer = await getBrowserProvider().getSigner();
   const me = getAddress(await signer.getAddress());
-  const token = new Contract(task.tokenEvm, ["function balanceOf(address) view returns (uint256)"], provider);
+  const token = new Contract(task.tokenEvm, ["function balanceOf(address) view returns (uint256)"], getRpcProvider());
   const bal: bigint = await withRetry(() => token.balanceOf(me) as Promise<bigint>);
   if (bal < task.amount) {
     throw new Error(
@@ -142,12 +173,40 @@ export async function assertClientHasTokenBalance(task: Task): Promise<void> {
   }
 }
 
-export async function associateHtsToken(tokenEvm: string): Promise<void> {
+async function sendUncheckedTransaction(to: string, data: string): Promise<string> {
   const signer = await getBrowserProvider().getSigner();
-  const token = new Contract(tokenEvm, HTS_TOKEN_ASSOCIATE_ABI, signer);
+  return withRetry(() =>
+    signer.sendUncheckedTransaction({
+      to,
+      data,
+      gasLimit: HEDERA_GAS.gasLimit,
+    }),
+  );
+}
+
+export async function waitForHederaTransaction(hash: string): Promise<import("ethers").TransactionReceipt> {
+  const provider = getRpcProvider();
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < TX_RECEIPT_TIMEOUT_MS) {
+    const receipt = await withRetry(() => provider.getTransactionReceipt(hash));
+    if (receipt) {
+      if (receipt.status === 0) {
+        throw new Error(`Transaction reverted on Hedera Testnet: ${hash}`);
+      }
+      return receipt;
+    }
+    await new Promise((resolve) => setTimeout(resolve, TX_RECEIPT_POLL_MS));
+  }
+
+  throw new Error(`Timed out waiting for Hedera Testnet confirmation: ${hash}`);
+}
+
+export async function associateHtsToken(tokenEvm: string): Promise<void> {
+  const tokenInterface = new Interface(HTS_TOKEN_ASSOCIATE_ABI);
   try {
-    const tx = await withRetry(() => token.associate(HEDERA_GAS) as Promise<import("ethers").TransactionResponse>);
-    await tx.wait();
+    const hash = await sendUncheckedTransaction(tokenEvm, tokenInterface.encodeFunctionData("associate"));
+    await waitForHederaTransaction(hash);
   } catch (e: unknown) {
     if (isUserRejected(e)) throw e;
     const msg = String((e as { message?: string }).message ?? "").toLowerCase();
@@ -164,41 +223,36 @@ export async function associateHtsToken(tokenEvm: string): Promise<void> {
   }
 }
 
-export async function approveTokenForEscrow(task: Task): Promise<import("ethers").TransactionResponse> {
+export async function approveTokenForEscrow(task: Task): Promise<string> {
   const { contractAddress } = requireEnvEscrow();
   if (!task.tokenEvm) throw new Error("Task missing tokenEvm");
   await assertFundingWalletIsClient(task);
   await associateHtsToken(task.tokenEvm);
-  const signer = await getBrowserProvider().getSigner();
-  const token = new Contract(task.tokenEvm, ERC20_ABI, signer);
-  return withRetry(() => token.approve(contractAddress, task.amount, HEDERA_GAS) as Promise<import("ethers").TransactionResponse>);
+  const tokenInterface = new Interface(ERC20_ABI);
+  return sendUncheckedTransaction(task.tokenEvm, tokenInterface.encodeFunctionData("approve", [contractAddress, task.amount]));
 }
 
-export async function fundTaskOnChain(task: Task): Promise<import("ethers").TransactionResponse> {
+export async function fundTaskOnChain(task: Task): Promise<string> {
   const { contractAddress } = requireEnvEscrow();
   if (!task.workerEvm || !task.verifierEvm || !task.tokenEvm) {
     throw new Error("Task missing EVM addresses for fundTask");
   }
   await assertFundingWalletIsClient(task);
-  const signer = await getBrowserProvider().getSigner();
-  const escrow = new Contract(contractAddress, ESCROW_WRITE_ABI, signer);
-  return withRetry(() =>
-    escrow.fundTask(BigInt(task.id), task.workerEvm, task.verifierEvm, task.tokenEvm, task.amount, HEDERA_GAS) as Promise<
-      import("ethers").TransactionResponse
-    >,
+  const escrowInterface = new Interface(ESCROW_WRITE_ABI);
+  return sendUncheckedTransaction(
+    contractAddress,
+    escrowInterface.encodeFunctionData("fundTask", [BigInt(task.id), task.workerEvm, task.verifierEvm, task.tokenEvm, task.amount]),
   );
 }
 
-export async function releaseOnChain(taskId: number): Promise<import("ethers").TransactionResponse> {
+export async function releaseOnChain(taskId: number): Promise<string> {
   const { contractAddress } = requireEnvEscrow();
-  const signer = await getBrowserProvider().getSigner();
-  const escrow = new Contract(contractAddress, ESCROW_WRITE_ABI, signer);
-  return withRetry(() => escrow.release(BigInt(taskId), HEDERA_GAS) as Promise<import("ethers").TransactionResponse>);
+  const escrowInterface = new Interface(ESCROW_WRITE_ABI);
+  return sendUncheckedTransaction(contractAddress, escrowInterface.encodeFunctionData("release", [BigInt(taskId)]));
 }
 
-export async function refundOnChain(taskId: number): Promise<import("ethers").TransactionResponse> {
+export async function refundOnChain(taskId: number): Promise<string> {
   const { contractAddress } = requireEnvEscrow();
-  const signer = await getBrowserProvider().getSigner();
-  const escrow = new Contract(contractAddress, ESCROW_WRITE_ABI, signer);
-  return withRetry(() => escrow.refund(BigInt(taskId), HEDERA_GAS) as Promise<import("ethers").TransactionResponse>);
+  const escrowInterface = new Interface(ESCROW_WRITE_ABI);
+  return sendUncheckedTransaction(contractAddress, escrowInterface.encodeFunctionData("refund", [BigInt(taskId)]));
 }

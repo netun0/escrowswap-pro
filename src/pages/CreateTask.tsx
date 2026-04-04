@@ -128,7 +128,7 @@ export default function CreateTask() {
       </div>
 
       {!authenticated && (
-        <AuthRequiredCta description="Connect MetaMask or HashPack to identify the client account before creating a task." />
+        <AuthRequiredCta description="Connect a Hedera Testnet wallet to identify the client account before creating a task." />
       )}
 
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
@@ -265,7 +265,7 @@ export default function CreateTask() {
               )}
               {!authenticated && (
                 <p className="text-[10px] text-amber-600 font-mono">
-                  Sign in from the sidebar (MetaMask or HashPack) before creating a task.
+                  Sign in from the sidebar with your connected wallet before creating a task.
                 </p>
               )}
               {ONCHAIN_ESCROW_ENABLED && (
