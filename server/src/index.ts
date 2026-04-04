@@ -1,6 +1,8 @@
-import "dotenv/config";
+import { config as loadEnv } from "dotenv";
 import cors from "cors";
 import express from "express";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   AccountId,
   Client,
@@ -11,6 +13,9 @@ import {
 } from "@hashgraph/sdk";
 import Long from "long";
 import { AgentMode, HederaBuilder, HederaLangchainToolkit } from "hedera-agent-kit";
+
+// The server process runs from `/server`, but the shared env file lives at the repo root.
+loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../../.env") });
 
 /** Task shape aligned with the Vite app (`src/contracts/config`). Amount is smallest units (tinybars or token decimals). */
 type StoredTask = {
