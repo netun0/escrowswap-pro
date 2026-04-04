@@ -226,6 +226,38 @@ export const MOCK_HACKATHONS: Hackathon[] = [
         payoutTxHash: null,
       },
     ],
+    similarityClusters: [
+      {
+        id: "clust-agents",
+        label: "Agent-native workflows",
+        theme: "AI agents negotiating, settling, or coordinating onchain actions.",
+        agentRationale:
+          "Embedding similarity over project title + description groups AgentSwarm and ChatSettler: both treat autonomous agents as the primary actor driving contracts and value transfer.",
+        agentId: "0.0.61004",
+        clusteredAt: now - 4 * hour,
+        submissionIds: ["sub-1", "sub-3"],
+      },
+      {
+        id: "clust-defi",
+        label: "Yield & liquidity design",
+        theme: "Capital efficiency, rebalancing, and tradable locked liquidity.",
+        agentRationale:
+          "YieldMorph and LiquidLock share lexical and product patterns around LP movement, yield, and how liquidity is locked or rebalanced across time.",
+        agentId: "0.0.61004",
+        clusteredAt: now - 4 * hour,
+        submissionIds: ["sub-2", "sub-5"],
+      },
+      {
+        id: "clust-infra",
+        label: "Data & developer surfaces",
+        theme: "Indexing, APIs, and structured access to chain state.",
+        agentRationale:
+          "IndexQL is distinct from agent and yield verticals; singleton cluster for infra and developer-experience similarity.",
+        agentId: "0.0.61004",
+        clusteredAt: now - 4 * hour,
+        submissionIds: ["sub-4"],
+      },
+    ],
   },
   {
     id: "hedera-builder-sprint",
@@ -324,5 +356,23 @@ export const MOCK_AGENT_ACTIVITY: AgentActivity[] = [
     submissionId: "sub-4",
     timestamp: now - 8 * hour,
     hederaTxId: "0.0.1234@1234567896.123456789",
+  },
+  {
+    id: "act-8",
+    agentName: "0.0.61004",
+    agentRole: "clustering",
+    action: "Clustered 5 submissions into 3 theme groups (agent-native, DeFi liquidity, infra)",
+    submissionId: "sub-1",
+    timestamp: now - 4 * hour,
+    hederaTxId: "0.0.1234@1234567897.123456789",
+  },
+  {
+    id: "act-9",
+    agentName: "0.0.61004",
+    agentRole: "clustering",
+    action: "Wrote rationale for group “Agent-native workflows” (2 submissions)",
+    submissionId: "sub-1",
+    timestamp: now - 4 * hour + 60,
+    hederaTxId: "0.0.1234@1234567898.123456789",
   },
 ];

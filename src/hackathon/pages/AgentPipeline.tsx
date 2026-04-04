@@ -1,5 +1,5 @@
 import { MOCK_AGENT_ACTIVITY, MOCK_HACKATHONS } from "../mockData";
-import { Bot, CheckCircle2, XCircle, Shield, Sparkles, ExternalLink } from "lucide-react";
+import { Bot, CheckCircle2, Shield, Sparkles, ExternalLink, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AgentRole } from "../types";
 
@@ -35,7 +35,33 @@ const agentConfig: Record<AgentRole, { label: string; desc: string; icon: typeof
     icon: Bot,
     color: "text-[hsl(var(--state-verified))]",
   },
+  clustering: {
+    label: "Converge",
+    desc: "Embedding similarity + LLM labels group submissions by project theme for judges.",
+    icon: Layers,
+    color: "text-violet-500",
+  },
 };
+
+const PIPELINE_AGENT_ROLES = ["eligibility", "track-fit", "quality", "clustering"] as const satisfies readonly AgentRole[];
+
+function agentBadgeIndex(role: AgentRole): string {
+  const order: Record<(typeof PIPELINE_AGENT_ROLES)[number], string> = {
+    eligibility: "1",
+    "track-fit": "2",
+    quality: "3",
+    clustering: "4",
+  };
+  return order[role as keyof typeof order] ?? "?";
+}
+
+function agentProgressClass(role: AgentRole): string {
+  if (role === "eligibility") return "bg-primary";
+  if (role === "track-fit") return "bg-accent";
+  if (role === "quality") return "bg-[hsl(var(--state-submitted))]";
+  if (role === "clustering") return "bg-violet-500";
+  return "bg-muted-foreground";
+}
 
 export default function AgentPipeline() {
   const hackathon = MOCK_HACKATHONS[0];
@@ -47,16 +73,24 @@ export default function AgentPipeline() {
       <div>
         <h1 className="text-xl font-black text-foreground">Agent Pipeline</h1>
         <p className="text-xs text-muted-foreground mt-1">
-          3 autonomous agents verify every submission. Humans make the final call.
+          Four autonomous agents verify, score, and group submissions. Humans make the final call.
         </p>
       </div>
 
       {/* Agent cards */}
-      <div className="grid grid-cols-3 gap-3">
-        {(["eligibility", "track-fit", "quality"] as AgentRole[]).map((role) => {
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {PIPELINE_AGENT_ROLES.map((role) => {
           const cfg = agentConfig[role];
           const Icon = cfg.icon;
           const activity = MOCK_AGENT_ACTIVITY.filter((a) => a.agentRole === role);
+          const denom =
+            role === "clustering" && hackathon.similarityClusters?.length
+              ? hackathon.submissions.length
+              : Math.max(hackathon.submissions.length, 1);
+          const numer =
+            role === "clustering" && hackathon.similarityClusters?.length
+              ? hackathon.submissions.length
+              : activity.length;
           return (
             <div key={role} className="border border-border bg-card p-5 space-y-4">
               <div className="flex items-start justify-between">
@@ -68,19 +102,23 @@ export default function AgentPipeline() {
                   <p className="text-[10px] text-muted-foreground leading-relaxed">{cfg.desc}</p>
                 </div>
                 <span className="text-[9px] font-mono px-1.5 py-0.5 bg-secondary text-secondary-foreground">
-                  Agent {role === "eligibility" ? "1" : role === "track-fit" ? "2" : "3"}
+                  Agent {agentBadgeIndex(role)}
                 </span>
               </div>
 
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-[10px]">
-                  <span className="text-muted-foreground">Processed</span>
-                  <span className="font-mono text-foreground">{activity.length} submissions</span>
+                  <span className="text-muted-foreground">{role === "clustering" ? "Runs" : "Processed"}</span>
+                  <span className="font-mono text-foreground">
+                    {role === "clustering" && hackathon.similarityClusters?.length
+                      ? `${hackathon.similarityClusters.length} groups`
+                      : `${activity.length} submissions`}
+                  </span>
                 </div>
                 <div className="h-1 bg-secondary rounded-full overflow-hidden">
                   <div
-                    className={cn("h-full rounded-full", role === "eligibility" ? "bg-primary" : role === "track-fit" ? "bg-accent" : "bg-[hsl(var(--state-submitted))]")}
-                    style={{ width: `${(activity.length / Math.max(hackathon.submissions.length, 1)) * 100}%` }}
+                    className={cn("h-full rounded-full", agentProgressClass(role))}
+                    style={{ width: `${(numer / denom) * 100}%` }}
                   />
                 </div>
               </div>
