@@ -41,7 +41,7 @@ export default function Dashboard() {
           Agent Escrow
         </h1>
         <p className="mt-0.5 text-xs text-muted-foreground font-mono uppercase tracking-wider">
-          ERC-8183 · Arc Testnet · UniswapX Settlement
+          ERC-8183 · Arc Testnet · USDC-Native Escrow
         </p>
       </div>
 
