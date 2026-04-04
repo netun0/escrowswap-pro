@@ -87,7 +87,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             </Button>
           )}
           <p className="mt-2 text-center text-[9px] font-mono text-muted-foreground uppercase tracking-widest">
-            Sepolia Testnet
+            Arc Testnet
           </p>
         </div>
       </aside>

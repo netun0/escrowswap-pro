@@ -1,50 +1,36 @@
-// Sepolia testnet configuration
+// Arc Testnet — USDC-native L2 by Circle
 export const CHAIN_CONFIG = {
-  chainId: 11155111,
-  chainName: "Sepolia",
-  rpcUrl: "https://rpc.sepolia.org",
-  blockExplorer: "https://sepolia.etherscan.io",
-  nativeCurrency: { name: "SepoliaETH", symbol: "ETH", decimals: 18 },
+  chainId: 5042002,
+  chainName: "Arc Testnet",
+  rpcUrl: "https://rpc.testnet.arc.network",
+  blockExplorer: "https://testnet.arcscan.app",
+  nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
 } as const;
 
-// Contract addresses (set VITE_AGENT_ESCROW_ADDRESS after `npm run deploy:local` / Sepolia)
+// Contract addresses (set VITE_AGENT_ESCROW_ADDRESS after `npm run deploy:arc`)
 export const CONTRACT_ADDRESSES = {
   agentEscrow: import.meta.env.VITE_AGENT_ESCROW_ADDRESS ?? "0x0000000000000000000000000000000000000000",
-  uniswapPayout: "0x0000000000000000000000000000000000000000",
-  x402Relay: "0x0000000000000000000000000000000000000000",
-  // Uniswap V3 SwapRouter on Sepolia
-  uniswapRouter: "0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E",
+  uniswapPayout: import.meta.env.VITE_UNISWAP_PAYOUT_ADDRESS ?? "0x0000000000000000000000000000000000000000",
+  x402Relay: import.meta.env.VITE_X402_RELAY_ADDRESS ?? "0x0000000000000000000000000000000000000000",
+  // Canonical Permit2 on Arc Testnet
+  permit2: "0x000000000022D473030F116dDEE9F6B43aC78BA3",
 } as const;
 
-// Test tokens on Sepolia
+// Tokens on Arc Testnet
 export const TOKENS: Record<string, { address: string; symbol: string; name: string; decimals: number; logoColor: string }> = {
-  WETH: {
-    address: "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
-    symbol: "WETH",
-    name: "Wrapped Ether",
-    decimals: 18,
-    logoColor: "#627EEA",
-  },
   USDC: {
-    address: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+    address: "0x3600000000000000000000000000000000000000",
     symbol: "USDC",
     name: "USD Coin",
     decimals: 6,
     logoColor: "#2775CA",
   },
-  DAI: {
-    address: "0x68194a729C2450ad26072b3D33ADaCbcef39D574",
-    symbol: "DAI",
-    name: "Dai Stablecoin",
-    decimals: 18,
-    logoColor: "#F5AC37",
-  },
-  LINK: {
-    address: "0x779877A7B0D9E8603169DdbD7836e478b4624789",
-    symbol: "LINK",
-    name: "Chainlink",
-    decimals: 18,
-    logoColor: "#2A5ADA",
+  EURC: {
+    address: "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
+    symbol: "EURC",
+    name: "Euro Coin",
+    decimals: 6,
+    logoColor: "#1A73E8",
   },
 } as const;
 
@@ -120,5 +106,5 @@ export interface AuditEvent {
   actor: string;
   timestamp: number;
   txHash: string;
-  network: "Sepolia" | "Hedera";
+  network: "Arc" | "Hedera";
 }
