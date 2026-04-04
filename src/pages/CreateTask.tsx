@@ -7,12 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useEscrow, useWallet } from "@/hooks/useEscrow";
+import { useEscrow } from "@/hooks/useEscrow";
 import { TOKENS, VERIFIER_MODE_LABELS, type VerifierMode } from "@/contracts/config";
 import { ESCROW_USE_MOCK, HEDERA_API_URL } from "@/contracts/env";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
+import { useAuth } from "@/auth/useAuth";
+import { AuthRequiredCta } from "@/components/AuthRequiredCta";
 
 function toDatetimeLocalValue(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -28,7 +30,7 @@ function defaultDeadlineLocal(daysAhead = 7): string {
 export default function CreateTask() {
   const navigate = useNavigate();
   const { createTask, txPending } = useEscrow();
-  const { address: clientId } = useWallet();
+  const { authenticated, openAuthDialog, user } = useAuth();
   const [loading, setLoading] = useState(false);
 
   const [form, setForm] = useState({
@@ -49,6 +51,12 @@ export default function CreateTask() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!authenticated || !user) {
+      openAuthDialog();
+      toast({ title: "Authentication required", description: "Sign in with HashPack before creating a task." });
+      return;
+    }
+
     setLoading(true);
     try {
       const tokenMeta = Object.values(TOKENS).find((t) => t.symbol === form.paymentToken);
@@ -78,7 +86,7 @@ export default function CreateTask() {
         amount: amountWei,
         workerPreferredToken: workerTokenMeta.address,
         deadlineUnix,
-        clientId: clientId ?? undefined,
+        clientAccountId: user.accountId,
       });
       toast({ title: "Job Created", description: `Task #${taskId} is now open for funding` });
       navigate(`/task/${taskId}`);
@@ -98,6 +106,10 @@ export default function CreateTask() {
           Describe what you need · assign agents · fund the operator escrow on Hedera
         </p>
       </div>
+
+      {!authenticated && (
+        <AuthRequiredCta description="Connect your HashPack wallet to identify the client account before creating a task." />
+      )}
 
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
         <form onSubmit={handleSubmit}>
@@ -217,9 +229,9 @@ export default function CreateTask() {
               {!ESCROW_USE_MOCK && !HEDERA_API_URL && (
                 <p className="text-[10px] text-destructive font-mono">Set VITE_HEDERA_API_URL to create tasks against the server.</p>
               )}
-              {!ESCROW_USE_MOCK && !clientId && (
+              {!authenticated && (
                 <p className="text-[10px] text-amber-600 font-mono">
-                  Connect your Hedera client id in the sidebar — it is sent as `clientId` when creating the task.
+                  Sign in with HashPack in the sidebar before creating a task.
                 </p>
               )}
 
@@ -301,10 +313,10 @@ export default function CreateTask() {
           <Button
             type="submit"
             className="mt-4 w-full bg-primary text-primary-foreground font-bold uppercase tracking-wider text-xs h-10"
-            disabled={loading || txPending}
+            disabled={!authenticated || loading || txPending}
           >
             {loading || txPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Create Job
+            {authenticated ? "Create Job" : "Sign In To Create"}
           </Button>
         </form>
       </motion.div>
