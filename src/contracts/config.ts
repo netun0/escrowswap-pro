@@ -34,6 +34,63 @@ export const TOKENS: Record<string, { address: string; symbol: string; name: str
   },
 } as const;
 
+// Cross-chain source tokens (informational only — represent what an agent holds on origin chains)
+export const SOURCE_TOKENS: Record<string, {
+  symbol: string;
+  name: string;
+  chain: string;
+  chainId: number;
+  decimals: number;
+  logoColor: string;
+  bridgeMethod: string;
+}> = {
+  ETH: {
+    symbol: "ETH",
+    name: "Ether",
+    chain: "Ethereum",
+    chainId: 1,
+    decimals: 18,
+    logoColor: "#627EEA",
+    bridgeMethod: "UniswapX + CCTP",
+  },
+  WETH: {
+    symbol: "WETH",
+    name: "Wrapped Ether",
+    chain: "Ethereum",
+    chainId: 1,
+    decimals: 18,
+    logoColor: "#EC4899",
+    bridgeMethod: "UniswapX + CCTP",
+  },
+  "USDC-ETH": {
+    symbol: "USDC",
+    name: "USD Coin (Ethereum)",
+    chain: "Ethereum",
+    chainId: 1,
+    decimals: 6,
+    logoColor: "#2775CA",
+    bridgeMethod: "CCTP",
+  },
+  "ARB-ETH": {
+    symbol: "ETH",
+    name: "Ether (Arbitrum)",
+    chain: "Arbitrum",
+    chainId: 42161,
+    decimals: 18,
+    logoColor: "#28A0F0",
+    bridgeMethod: "UniswapX + CCTP",
+  },
+  "USDC-ARB": {
+    symbol: "USDC",
+    name: "USD Coin (Arbitrum)",
+    chain: "Arbitrum",
+    chainId: 42161,
+    decimals: 6,
+    logoColor: "#2775CA",
+    bridgeMethod: "CCTP",
+  },
+} as const;
+
 export const TASK_STATES = [
   "Open",
   "Funded",

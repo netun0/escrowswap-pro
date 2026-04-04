@@ -36,12 +36,13 @@ export function TaskStateMachine({ currentState }: { currentState: TaskState }) 
             >
               <div
                 className={cn(
-                  "h-2.5 w-2.5 transition-all",
+                  "h-3 w-3 transition-all",
                   isActive && `${stateColors[state]}`,
                   isPast && "bg-primary/40",
-                  isFuture && "bg-muted border border-border",
+                  isFuture && "bg-muted-foreground/20",
                   isTerminal && state === currentState && stateColors[state]
                 )}
+                style={{ clipPath: "polygon(0 0, 100% 50%, 0 100%)" }}
               />
               <span
                 className={cn(
@@ -67,7 +68,10 @@ export function TaskStateMachine({ currentState }: { currentState: TaskState }) 
         <>
           <div className="h-px w-5 -mt-3 bg-destructive/30" />
           <div className="flex flex-col items-center">
-            <div className={cn("h-2.5 w-2.5", stateColors[currentState])} />
+            <div
+              className={cn("h-3 w-3", stateColors[currentState])}
+              style={{ clipPath: "polygon(0 0, 100% 50%, 0 100%)" }}
+            />
             <span className="mt-1 text-[8px] font-mono font-bold text-foreground uppercase tracking-wider">
               {currentState}
             </span>

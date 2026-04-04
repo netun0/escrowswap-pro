@@ -7,8 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useEscrow, useUniswapQuote } from "@/hooks/useEscrow";
-import { TOKENS, VERIFIER_MODE_LABELS, type VerifierMode } from "@/contracts/config";
+import { useEscrow, useUniswapQuote, type CrossChainQuote } from "@/hooks/useEscrow";
+import { TOKENS, SOURCE_TOKENS, VERIFIER_MODE_LABELS, type VerifierMode } from "@/contracts/config";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "@/hooks/use-toast";
 import { ArrowRightLeft, Loader2 } from "lucide-react";
@@ -18,7 +18,7 @@ export default function CreateTask() {
   const { createTask, txPending } = useEscrow();
   const { getQuote } = useUniswapQuote();
   const [loading, setLoading] = useState(false);
-  const [quote, setQuote] = useState<{ amountOut: string; priceImpact: string; fee: string } | null>(null);
+  const [quote, setQuote] = useState<CrossChainQuote | null>(null);
 
   const [form, setForm] = useState({
     description: "",
@@ -26,6 +26,7 @@ export default function CreateTask() {
     worker: "",
     verifier: "",
     verifierMode: "human" as VerifierMode,
+    sourceToken: "",
     paymentToken: "",
     amount: "",
     workerPreferredToken: "",
@@ -36,9 +37,19 @@ export default function CreateTask() {
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
+  const selectedSource = form.sourceToken ? SOURCE_TOKENS[form.sourceToken] : null;
+  const isCrossChain = !!selectedSource;
+
   const fetchQuote = async () => {
-    if (form.paymentToken && form.workerPreferredToken && form.amount) {
-      const q = await getQuote(form.paymentToken, form.workerPreferredToken, form.amount);
+    const inSymbol = isCrossChain ? selectedSource!.symbol : form.paymentToken;
+    if (inSymbol && form.paymentToken && form.amount) {
+      const q = await getQuote(
+        inSymbol,
+        form.paymentToken,
+        form.amount,
+        selectedSource?.chain,
+        selectedSource?.bridgeMethod,
+      );
       setQuote(q);
     }
   };
@@ -182,12 +193,37 @@ export default function CreateTask() {
           <Card className="mt-3">
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-bold uppercase tracking-wider">Budget & Deadline</CardTitle>
-              <CardDescription className="text-xs">Set your budget, payout preference, and deadline</CardDescription>
+              <CardDescription className="text-xs">Set your source token, escrow budget, payout preference, and deadline</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="space-y-1.5">
+                <Label className="text-[10px] uppercase tracking-wider">Source Token (your chain)</Label>
+                <Select value={form.sourceToken} onValueChange={(v) => updateField("sourceToken", v)}>
+                  <SelectTrigger><SelectValue placeholder="Select origin token…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">
+                      <span className="flex items-center gap-2 text-muted-foreground">Already on Arc — no bridge needed</span>
+                    </SelectItem>
+                    {Object.entries(SOURCE_TOKENS).map(([key, t]) => (
+                      <SelectItem key={key} value={key}>
+                        <span className="flex items-center gap-2">
+                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: t.logoColor }} />
+                          {t.symbol} <span className="text-muted-foreground">on {t.chain}</span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {isCrossChain && (
+                  <p className="text-[9px] text-muted-foreground font-mono">
+                    Funds will be swapped via {selectedSource!.bridgeMethod} from {selectedSource!.chain} to Arc Testnet
+                  </p>
+                )}
+              </div>
+
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-1.5">
-                  <Label className="text-[10px] uppercase tracking-wider">Pay With</Label>
+                  <Label className="text-[10px] uppercase tracking-wider">Escrow Token (Arc)</Label>
                   <Select value={form.paymentToken} onValueChange={(v) => updateField("paymentToken", v)}>
                     <SelectTrigger><SelectValue placeholder="Token" /></SelectTrigger>
                     <SelectContent>
@@ -232,7 +268,7 @@ export default function CreateTask() {
 
               <div className="flex items-center gap-3">
                 <div className="flex-1 space-y-1.5">
-                  <Label className="text-[10px] uppercase tracking-wider">Worker Gets Paid In</Label>
+                  <Label className="text-[10px] uppercase tracking-wider">Worker Payout Token</Label>
                   <Select value={form.workerPreferredToken} onValueChange={(v) => updateField("workerPreferredToken", v)}>
                     <SelectTrigger><SelectValue placeholder="Payout token" /></SelectTrigger>
                     <SelectContent>
@@ -253,7 +289,7 @@ export default function CreateTask() {
                   size="icon"
                   className="mt-5"
                   onClick={fetchQuote}
-                  disabled={!form.paymentToken || !form.workerPreferredToken || !form.amount}
+                  disabled={!form.paymentToken || !form.amount}
                 >
                   <ArrowRightLeft className="h-4 w-4" />
                 </Button>
@@ -263,13 +299,20 @@ export default function CreateTask() {
                 <motion.div
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: "auto" }}
-                  className="border border-primary/30 bg-primary/5 p-3"
+                  className="border border-primary/30 bg-primary/5 p-3 space-y-2"
                 >
-                  <p className="text-[10px] font-bold text-primary mb-2 uppercase tracking-wider">Swap Preview — Uniswap V3</p>
-                  <div className="grid grid-cols-3 gap-2 text-xs font-mono text-muted-foreground">
+                  <p className="text-[10px] font-bold text-primary uppercase tracking-wider">
+                    {isCrossChain ? "UniswapX Cross-Chain Funding Quote" : "UniswapX FX Quote"}
+                  </p>
+                  {isCrossChain && (
+                    <p className="text-[10px] text-muted-foreground font-mono">
+                      {form.amount} {selectedSource!.symbol} on {selectedSource!.chain} → {quote.amountOut} {form.paymentToken} on Arc
+                    </p>
+                  )}
+                  <div className="grid grid-cols-4 gap-2 text-xs font-mono text-muted-foreground">
                     <div>
                       <span className="text-[9px] uppercase">Output</span>
-                      <p className="text-foreground">{quote.amountOut}</p>
+                      <p className="text-foreground">{quote.amountOut} {form.paymentToken}</p>
                     </div>
                     <div>
                       <span className="text-[9px] uppercase">Impact</span>
@@ -279,7 +322,16 @@ export default function CreateTask() {
                       <span className="text-[9px] uppercase">Fee</span>
                       <p className="text-foreground">{quote.fee}</p>
                     </div>
+                    <div>
+                      <span className="text-[9px] uppercase">Est. Time</span>
+                      <p className="text-foreground">{quote.estimatedTime}</p>
+                    </div>
                   </div>
+                  {isCrossChain && (
+                    <div className="pt-1 border-t border-primary/20">
+                      <p className="text-[9px] text-muted-foreground font-mono">{quote.route}</p>
+                    </div>
+                  )}
                 </motion.div>
               )}
             </CardContent>
@@ -291,7 +343,7 @@ export default function CreateTask() {
             disabled={loading || txPending}
           >
             {loading || txPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Create Job & Lock Funds
+            Create Job
           </Button>
         </form>
       </motion.div>

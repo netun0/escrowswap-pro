@@ -229,16 +229,45 @@ export function useEscrow() {
   return { tasks, loading, txPending, createTask, advanceState, fetchTasks };
 }
 
+export interface CrossChainQuote {
+  amountOut: string;
+  priceImpact: string;
+  fee: string;
+  sourceChain: string;
+  sourceToken: string;
+  escrowToken: string;
+  bridgeMethod: string;
+  route: string;
+  estimatedTime: string;
+}
+
 export function useUniswapQuote() {
   const getQuote = useCallback(
-    async (tokenIn: string, tokenOut: string, amountIn: string) => {
+    async (
+      tokenIn: string,
+      tokenOut: string,
+      amountIn: string,
+      sourceChain?: string,
+      bridgeMethod?: string,
+    ): Promise<CrossChainQuote> => {
       const inAmount = parseFloat(amountIn);
       const rate = 0.98 + Math.random() * 0.04;
+      const chain = sourceChain ?? "Arc Testnet";
+      const bridge = bridgeMethod ?? "Direct";
+      const isCrossChain = chain !== "Arc Testnet";
+
       return {
         amountOut: (inAmount * rate).toFixed(6),
         priceImpact: (Math.random() * 0.5).toFixed(2),
-        route: `${tokenIn.slice(0, 6)}→${tokenOut.slice(0, 6)}`,
-        fee: "0.3%",
+        fee: isCrossChain ? "0.05%" : "0.3%",
+        sourceChain: chain,
+        sourceToken: tokenIn,
+        escrowToken: tokenOut,
+        bridgeMethod: bridge,
+        route: isCrossChain
+          ? `${tokenIn} on ${chain} → UniswapX → CCTP → ${tokenOut} on Arc`
+          : `${tokenIn} → ${tokenOut} on Arc`,
+        estimatedTime: isCrossChain ? "~2 min" : "~15 sec",
       };
     },
     []

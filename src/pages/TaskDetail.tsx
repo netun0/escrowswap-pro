@@ -235,7 +235,7 @@ export default function TaskDetail() {
                 {getTokenSymbol(task.workerPreferredToken)}
                 {needsSwap && (
                   <span className="ml-2 inline-flex items-center text-[10px] text-muted-foreground font-normal">
-                    <ArrowRightLeft className="mr-1 h-2.5 w-2.5" /> via Uniswap
+                    <ArrowRightLeft className="mr-1 h-2.5 w-2.5" /> via UniswapX FX
                   </span>
                 )}
               </p>
@@ -391,7 +391,7 @@ export default function TaskDetail() {
             {!ESCROW_USE_MOCK && needsSwap && task.state === "Submitted" && isVerifier && (
               <div className="rounded-md border border-border bg-muted/20 px-3 py-2 space-y-2">
                 <Label className="text-[10px] uppercase tracking-wider font-mono">
-                  UniswapX payout — min {getTokenSymbol(task.workerPreferredToken)} (human amount)
+                  Stablecoin FX Settlement — min {getTokenSymbol(task.workerPreferredToken)} output
                 </Label>
                 <Input
                   className="font-mono text-xs h-8"
@@ -400,13 +400,13 @@ export default function TaskDetail() {
                   disabled={txPending}
                 />
                 <p className="text-[9px] text-muted-foreground leading-relaxed font-mono">
-                  With VITE_UNISWAPX_USE_MOCK_ORDER=true the app encodes a mock reactor order (swapper = UniswapXPayout). The deployed
-                  reactor must hold enough output token to pay the worker (Hardhat deploy script mints to the mock reactor).
+                  UniswapX FX converts {getTokenSymbol(task.paymentToken)} → {getTokenSymbol(task.workerPreferredToken)} at settlement.
+                  With VITE_UNISWAPX_USE_MOCK_ORDER=true the app uses a mock reactor order for the stablecoin FX swap.
                 </p>
                 {!UNISWAPX_USE_MOCK_ORDER && (
                   <p className="text-[9px] text-destructive font-mono">
-                    Set VITE_UNISWAPX_USE_MOCK_ORDER=true for mock-encoded orders, or extend the app with full V2 Dutch signing via
-                    uniswapx-sdk / cosigner.
+                    Enable VITE_UNISWAPX_USE_MOCK_ORDER=true for mock stablecoin FX orders, or integrate V2 Dutch signing via
+                    uniswapx-sdk for production FX settlement.
                   </p>
                 )}
               </div>
