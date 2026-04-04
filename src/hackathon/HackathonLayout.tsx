@@ -1,9 +1,10 @@
 import { Link, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { Trophy, LayoutGrid, FileSearch, Bot, ArrowLeft } from "lucide-react";
+import { Trophy, LayoutGrid, FileSearch, Bot, ArrowLeft, PlusCircle } from "lucide-react";
 
 const navItems = [
   { path: "/hackathon", label: "Hackathons", icon: LayoutGrid },
+  { path: "/hackathon/create", label: "Create Event", icon: PlusCircle },
   { path: "/hackathon/live", label: "Live Event", icon: Trophy },
   { path: "/hackathon/submissions", label: "Submissions", icon: FileSearch },
   { path: "/hackathon/agents", label: "Agent Pipeline", icon: Bot },
