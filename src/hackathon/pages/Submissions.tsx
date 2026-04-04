@@ -1,15 +1,37 @@
 import { useSearchParams } from "react-router-dom";
+import { useMemo, useState } from "react";
 import { MOCK_HACKATHONS } from "../mockData";
-import { CheckCircle2, XCircle, AlertTriangle, ArrowLeft, ExternalLink, Github, Play } from "lucide-react";
+import {
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  ArrowLeft,
+  ExternalLink,
+  Github,
+  Play,
+  LayoutGrid,
+  List,
+  Layers,
+  Sparkles,
+} from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import type { Submission } from "../types";
+import type { Hackathon, SimilarityCluster, Submission } from "../types";
+import { Button } from "@/components/ui/button";
 
 function timeAgo(ts: number) {
   const diff = Date.now() / 1000 - ts;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function sortSubmissions(subs: Submission[]): Submission[] {
+  return [...subs].sort((a, b) => {
+    if (a.status === "ineligible" && b.status !== "ineligible") return 1;
+    if (b.status === "ineligible" && a.status !== "ineligible") return -1;
+    return (b.qualityScore?.score ?? 0) - (a.qualityScore?.score ?? 0);
+  });
 }
 
 function FitBadge({ fit }: { fit: "high" | "medium" | "low" }) {
@@ -25,12 +47,105 @@ function FitBadge({ fit }: { fit: "high" | "medium" | "low" }) {
   );
 }
 
-function SubmissionDetail({ sub, hackathon }: { sub: Submission; hackathon: typeof MOCK_HACKATHONS[0] }) {
+function SubmissionListRow({ sub }: { sub: Submission }) {
+  return (
+    <Link
+      to={`/hackathon/submissions?id=${sub.id}`}
+      className={cn(
+        "block border bg-card p-4 hover:border-accent/40 transition-colors group",
+        sub.status === "ineligible" ? "border-destructive/20 opacity-60" : "border-border",
+      )}
+    >
+      <div className="flex items-center gap-4">
+        {sub.qualityScore ? (
+          <span
+            className={cn(
+              "text-lg font-black font-mono w-10 text-center",
+              sub.qualityScore.score >= 85
+                ? "text-primary"
+                : sub.qualityScore.score >= 70
+                  ? "text-accent"
+                  : "text-muted-foreground",
+            )}
+          >
+            {sub.qualityScore.score}
+          </span>
+        ) : sub.status === "ineligible" ? (
+          <XCircle className="h-5 w-5 text-destructive mx-2" />
+        ) : (
+          <span className="text-lg font-mono text-muted-foreground w-10 text-center">—</span>
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-bold text-foreground group-hover:text-accent transition-colors">
+              {sub.projectName}
+            </span>
+            <span className="text-[9px] font-mono text-muted-foreground">{sub.teamName}</span>
+            {sub.trackFit && <FitBadge fit={sub.trackFit.fit} />}
+            {sub.status === "ineligible" && (
+              <span className="text-[9px] font-mono text-destructive uppercase">Ineligible</span>
+            )}
+          </div>
+          <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{sub.description}</p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {sub.eligibility?.passed && <CheckCircle2 className="h-3.5 w-3.5 text-primary" />}
+          <span className="text-[10px] text-muted-foreground">{timeAgo(sub.submittedAt)}</span>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+function ClusterSection({
+  cluster,
+  subs,
+}: {
+  cluster: SimilarityCluster;
+  subs: Submission[];
+}) {
+  const sorted = sortSubmissions(subs);
+  if (sorted.length === 0) return null;
+  return (
+    <section className="space-y-2">
+      <div className="rounded-md border border-violet-500/25 bg-violet-500/[0.06] px-4 py-3 space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Layers className="h-4 w-4 text-violet-500 shrink-0" />
+            <h2 className="text-sm font-bold text-foreground">{cluster.label}</h2>
+          </div>
+          <span className="text-[9px] font-mono text-muted-foreground">
+            Agent {cluster.agentId} · similarity · {timeAgo(cluster.clusteredAt)}
+          </span>
+        </div>
+        <p className="text-[11px] text-secondary-foreground leading-snug">{cluster.theme}</p>
+        <p className="text-[10px] text-muted-foreground leading-relaxed border-t border-violet-500/15 pt-2">
+          <span className="font-mono text-violet-600 dark:text-violet-400">Converge · </span>
+          {cluster.agentRationale}
+        </p>
+        <p className="text-[9px] font-mono text-muted-foreground">
+          {sorted.length} submission{sorted.length === 1 ? "" : "s"} in this theme
+        </p>
+      </div>
+      <div className="space-y-2 pl-1 border-l-2 border-violet-500/30">
+        {sorted.map((sub) => (
+          <SubmissionListRow key={sub.id} sub={sub} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SubmissionDetail({ sub, hackathon }: { sub: Submission; hackathon: Hackathon }) {
   const track = hackathon.tracks.find((t) => t.id === sub.trackId);
+  const cluster = hackathon.similarityClusters?.find((c) => c.submissionIds.includes(sub.id));
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <Link to="/hackathon/submissions" className="flex items-center gap-1.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors">
+      <Link
+        to="/hackathon/submissions"
+        className="flex items-center gap-1.5 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+      >
         <ArrowLeft className="h-3 w-3" /> All submissions
       </Link>
 
@@ -39,15 +154,22 @@ function SubmissionDetail({ sub, hackathon }: { sub: Submission; hackathon: type
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-xl font-black text-foreground">{sub.projectName}</h1>
-            <p className="text-xs text-muted-foreground mt-1">by {sub.teamName} · {track?.name}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              by {sub.teamName} · {track?.name}
+            </p>
           </div>
           {sub.qualityScore && (
             <div className="text-right">
-              <p className={cn(
-                "text-3xl font-black font-mono",
-                sub.qualityScore.score >= 85 ? "text-primary" :
-                sub.qualityScore.score >= 70 ? "text-accent" : "text-muted-foreground"
-              )}>
+              <p
+                className={cn(
+                  "text-3xl font-black font-mono",
+                  sub.qualityScore.score >= 85
+                    ? "text-primary"
+                    : sub.qualityScore.score >= 70
+                      ? "text-accent"
+                      : "text-muted-foreground",
+                )}
+              >
                 {sub.qualityScore.score}
               </p>
               <p className="text-[9px] font-mono text-muted-foreground">QUALITY SCORE</p>
@@ -57,12 +179,22 @@ function SubmissionDetail({ sub, hackathon }: { sub: Submission; hackathon: type
         <p className="text-xs text-secondary-foreground leading-relaxed">{sub.description}</p>
         <div className="flex items-center gap-3">
           {sub.githubUrl && (
-            <a href={sub.githubUrl} target="_blank" rel="noopener" className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground">
+            <a
+              href={sub.githubUrl}
+              target="_blank"
+              rel="noopener"
+              className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+            >
               <Github className="h-3 w-3" /> Repo <ExternalLink className="h-2.5 w-2.5" />
             </a>
           )}
           {sub.demoUrl && (
-            <a href={sub.demoUrl} target="_blank" rel="noopener" className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground">
+            <a
+              href={sub.demoUrl}
+              target="_blank"
+              rel="noopener"
+              className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+            >
               <Play className="h-3 w-3" /> Demo <ExternalLink className="h-2.5 w-2.5" />
             </a>
           )}
@@ -70,15 +202,30 @@ function SubmissionDetail({ sub, hackathon }: { sub: Submission; hackathon: type
         </div>
       </div>
 
+      {cluster && (
+        <div className="rounded-md border border-violet-500/25 bg-violet-500/[0.06] p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-violet-500" />
+            <p className="text-[10px] font-mono uppercase tracking-wider text-violet-600 dark:text-violet-400">
+              Similarity group
+            </p>
+          </div>
+          <p className="text-sm font-bold text-foreground">{cluster.label}</p>
+          <p className="text-[11px] text-secondary-foreground">{cluster.theme}</p>
+        </div>
+      )}
+
       {/* Agent Pipeline */}
       <div className="space-y-3">
         <h2 className="text-sm font-bold text-foreground">Agent Verification Pipeline</h2>
         <div className="grid grid-cols-3 gap-3">
           {/* Eligibility */}
-          <div className={cn(
-            "border bg-card p-4 space-y-3",
-            sub.eligibility?.passed ? "border-primary/30" : sub.eligibility ? "border-destructive/30" : "border-border"
-          )}>
+          <div
+            className={cn(
+              "border bg-card p-4 space-y-3",
+              sub.eligibility?.passed ? "border-primary/30" : sub.eligibility ? "border-destructive/30" : "border-border",
+            )}
+          >
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-[9px] font-mono text-muted-foreground uppercase">Agent 1 · Eligibility</p>
@@ -148,11 +295,16 @@ function SubmissionDetail({ sub, hackathon }: { sub: Submission; hackathon: type
                 <p className="text-[10px] font-mono text-muted-foreground mt-0.5">{sub.qualityScore?.agentId ?? "—"}</p>
               </div>
               {sub.qualityScore && (
-                <span className={cn(
-                  "text-xl font-black font-mono",
-                  sub.qualityScore.score >= 85 ? "text-primary" :
-                  sub.qualityScore.score >= 70 ? "text-accent" : "text-muted-foreground"
-                )}>
+                <span
+                  className={cn(
+                    "text-xl font-black font-mono",
+                    sub.qualityScore.score >= 85
+                      ? "text-primary"
+                      : sub.qualityScore.score >= 70
+                        ? "text-accent"
+                        : "text-muted-foreground",
+                  )}
+                >
                   {sub.qualityScore.score}
                 </span>
               )}
@@ -164,7 +316,9 @@ function SubmissionDetail({ sub, hackathon }: { sub: Submission; hackathon: type
                   <div className="space-y-1">
                     <p className="text-[9px] font-mono text-primary uppercase">Highlights</p>
                     {sub.qualityScore.highlights.map((h, i) => (
-                      <p key={i} className="text-[10px] text-secondary-foreground">+ {h}</p>
+                      <p key={i} className="text-[10px] text-secondary-foreground">
+                        + {h}
+                      </p>
                     ))}
                   </div>
                 )}
@@ -172,7 +326,9 @@ function SubmissionDetail({ sub, hackathon }: { sub: Submission; hackathon: type
                   <div className="space-y-1">
                     <p className="text-[9px] font-mono text-accent uppercase">Concerns</p>
                     {sub.qualityScore.concerns.map((c, i) => (
-                      <p key={i} className="text-[10px] text-muted-foreground">– {c}</p>
+                      <p key={i} className="text-[10px] text-muted-foreground">
+                        – {c}
+                      </p>
                     ))}
                   </div>
                 )}
@@ -189,70 +345,97 @@ export default function Submissions() {
   const [params] = useSearchParams();
   const hackathon = MOCK_HACKATHONS[0];
   const selectedId = params.get("id");
+  const hasClusters = (hackathon.similarityClusters?.length ?? 0) > 0;
+  const [view, setView] = useState<"grouped" | "flat">(() => (hasClusters ? "grouped" : "flat"));
+
+  const clusteredIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const c of hackathon.similarityClusters ?? []) {
+      for (const id of c.submissionIds) ids.add(id);
+    }
+    return ids;
+  }, [hackathon.similarityClusters]);
+
+  const ungroupedSubs = useMemo(
+    () => hackathon.submissions.filter((s) => !clusteredIds.has(s.id)),
+    [hackathon.submissions, clusteredIds],
+  );
+
+  const submissionById = useMemo(() => {
+    const m = new Map<string, Submission>();
+    for (const s of hackathon.submissions) m.set(s.id, s);
+    return m;
+  }, [hackathon.submissions]);
 
   if (selectedId) {
     const sub = hackathon.submissions.find((s) => s.id === selectedId);
     if (sub) return <SubmissionDetail sub={sub} hackathon={hackathon} />;
   }
 
-  const sorted = [...hackathon.submissions].sort((a, b) => {
-    if (a.status === "ineligible" && b.status !== "ineligible") return 1;
-    if (b.status === "ineligible" && a.status !== "ineligible") return -1;
-    return (b.qualityScore?.score ?? 0) - (a.qualityScore?.score ?? 0);
-  });
+  const sortedFlat = sortSubmissions(hackathon.submissions);
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-xl font-black text-foreground">{hackathon.name} — Submissions</h1>
-        <p className="text-xs text-muted-foreground mt-1">{hackathon.submissions.length} projects submitted</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-xl font-black text-foreground">{hackathon.name} — Submissions</h1>
+          <p className="text-xs text-muted-foreground mt-1">{hackathon.submissions.length} projects submitted</p>
+        </div>
+        {hasClusters && (
+          <div className="flex rounded-md border border-border bg-muted/30 p-0.5">
+            <Button
+              type="button"
+              variant={view === "grouped" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-8 text-[10px] font-mono gap-1.5"
+              onClick={() => setView("grouped")}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+              By theme (AI)
+            </Button>
+            <Button
+              type="button"
+              variant={view === "flat" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-8 text-[10px] font-mono gap-1.5"
+              onClick={() => setView("flat")}
+            >
+              <List className="h-3.5 w-3.5" />
+              All submissions
+            </Button>
+          </div>
+        )}
       </div>
 
-      <div className="space-y-2">
-        {sorted.map((sub) => (
-          <Link
-            key={sub.id}
-            to={`/hackathon/submissions?id=${sub.id}`}
-            className={cn(
-              "block border bg-card p-4 hover:border-accent/40 transition-colors group",
-              sub.status === "ineligible" ? "border-destructive/20 opacity-60" : "border-border"
-            )}
-          >
-            <div className="flex items-center gap-4">
-              {sub.qualityScore ? (
-                <span className={cn(
-                  "text-lg font-black font-mono w-10 text-center",
-                  sub.qualityScore.score >= 85 ? "text-primary" :
-                  sub.qualityScore.score >= 70 ? "text-accent" : "text-muted-foreground"
-                )}>
-                  {sub.qualityScore.score}
-                </span>
-              ) : sub.status === "ineligible" ? (
-                <XCircle className="h-5 w-5 text-destructive mx-2" />
-              ) : (
-                <span className="text-lg font-mono text-muted-foreground w-10 text-center">—</span>
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-foreground group-hover:text-accent transition-colors">
-                    {sub.projectName}
-                  </span>
-                  <span className="text-[9px] font-mono text-muted-foreground">{sub.teamName}</span>
-                  {sub.trackFit && <FitBadge fit={sub.trackFit.fit} />}
-                  {sub.status === "ineligible" && (
-                    <span className="text-[9px] font-mono text-destructive uppercase">Ineligible</span>
-                  )}
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{sub.description}</p>
+      {view === "flat" || !hasClusters ? (
+        <div className="space-y-2">
+          {sortedFlat.map((sub) => (
+            <SubmissionListRow key={sub.id} sub={sub} />
+          ))}
+        </div>
+      ) : (
+        <div className="space-y-8">
+          <p className="text-[10px] text-muted-foreground leading-relaxed">
+            Themes below are produced by the <strong className="text-foreground">Converge</strong> similarity agent (embeddings +
+            rationale). Use them to compare projects in the same idea neighborhood before deep-diving each repo.
+          </p>
+          {(hackathon.similarityClusters ?? []).map((cluster) => {
+            const subs = cluster.submissionIds.map((id) => submissionById.get(id)).filter(Boolean) as Submission[];
+            return <ClusterSection key={cluster.id} cluster={cluster} subs={subs} />;
+          })}
+          {ungroupedSubs.length > 0 && (
+            <section className="space-y-2">
+              <h2 className="text-sm font-bold text-foreground">Other submissions</h2>
+              <p className="text-[10px] text-muted-foreground">Not assigned to a similarity group yet.</p>
+              <div className="space-y-2">
+                {sortSubmissions(ungroupedSubs).map((sub) => (
+                  <SubmissionListRow key={sub.id} sub={sub} />
+                ))}
               </div>
-              <div className="flex items-center gap-2">
-                {sub.eligibility?.passed && <CheckCircle2 className="h-3.5 w-3.5 text-primary" />}
-                <span className="text-[10px] text-muted-foreground">{timeAgo(sub.submittedAt)}</span>
-              </div>
-            </div>
-          </Link>
-        ))}
-      </div>
+            </section>
+          )}
+        </div>
+      )}
     </div>
   );
 }

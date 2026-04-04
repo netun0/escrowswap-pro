@@ -1,6 +1,6 @@
 export type HackathonStatus = "upcoming" | "live" | "judging" | "completed";
 export type SubmissionStatus = "pending" | "eligible" | "ineligible" | "scored" | "winner";
-export type AgentRole = "eligibility" | "track-fit" | "quality" | "payout";
+export type AgentRole = "eligibility" | "track-fit" | "quality" | "payout" | "clustering";
 
 export interface Hackathon {
   id: string;
@@ -15,6 +15,8 @@ export interface Hackathon {
   submissionDeadline: number;
   judgingEndsAt: number;
   submissions: Submission[];
+  /** Grouped project themes from the similarity agent (for judge review). */
+  similarityClusters?: SimilarityCluster[];
   escrowLocked: boolean;
   escrowTxHash: string;
   organizer: string;
@@ -26,6 +28,16 @@ export interface Track {
   description: string;
   prize: number;
   requirements: string[];
+}
+
+export interface SimilarityCluster {
+  id: string;
+  label: string;
+  theme: string;
+  agentRationale: string;
+  agentId: string;
+  clusteredAt: number;
+  submissionIds: string[];
 }
 
 export interface Submission {
