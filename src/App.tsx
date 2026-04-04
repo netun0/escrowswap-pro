@@ -15,6 +15,7 @@ import HackathonIndex from "@/hackathon/pages/HackathonIndex";
 import LiveEvent from "@/hackathon/pages/LiveEvent";
 import Submissions from "@/hackathon/pages/Submissions";
 import AgentPipeline from "@/hackathon/pages/AgentPipeline";
+import CreateHackathon from "@/hackathon/pages/CreateHackathon";
 
 const queryClient = new QueryClient();
 
