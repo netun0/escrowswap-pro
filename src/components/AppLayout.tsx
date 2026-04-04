@@ -6,6 +6,7 @@ import {
   ListTodo,
   Activity,
   Wallet,
+  Trophy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/hooks/useEscrow";
