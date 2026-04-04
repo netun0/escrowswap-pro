@@ -5,11 +5,13 @@ import {
   PlusCircle,
   ListTodo,
   Activity,
-  Wallet,
+  Loader2,
+  LogOut,
   Trophy,
+  Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useWallet } from "@/hooks/useEscrow";
+import { useAuth } from "@/auth/useAuth";
 import { shortenAddress } from "@/contracts/mockData";
 
 const navItems = [
@@ -21,7 +23,8 @@ const navItems = [
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  const { address, connecting, connect, disconnect } = useWallet();
+  const { authStatus, authenticated, openAuthDialog, signOut, user, wallet } = useAuth();
+  const busy = authStatus === "connecting" || authStatus === "awaiting_signature" || authStatus === "verifying";
 
   return (
     <div className="flex min-h-screen">
@@ -73,33 +76,53 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="border-t border-sidebar-border p-3">
-          {address ? (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <div className="h-1.5 w-1.5 bg-primary" />
-                <span className="font-mono text-[10px] text-sidebar-foreground">
-                  {shortenAddress(address)}
-                </span>
+          {authenticated && user ? (
+            <div className="space-y-3 rounded-md border border-sidebar-border bg-background/40 p-3">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">
+                    Signed in
+                  </span>
+                  <span className="rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[9px] font-mono uppercase tracking-wider text-primary">
+                    {user.network}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="h-1.5 w-1.5 bg-primary" />
+                  <span className="font-mono text-[10px] text-sidebar-foreground">{shortenAddress(user.accountId)}</span>
+                </div>
+                <p className="text-[9px] text-muted-foreground">
+                  {wallet.walletName ?? "HashPack"} wallet connected to your Hedera account.
+                </p>
               </div>
               <Button
                 variant="ghost"
                 size="sm"
-                className="w-full text-[10px] h-7"
-                onClick={disconnect}
+                className="h-7 w-full text-[10px]"
+                onClick={() => void signOut()}
               >
-                Disconnect
+                <LogOut className="mr-1.5 h-3 w-3" />
+                Sign out
               </Button>
             </div>
           ) : (
-            <Button
-              size="sm"
-              className="w-full bg-primary text-primary-foreground text-[10px] h-8 font-semibold"
-              onClick={connect}
-              disabled={connecting}
-            >
-              <Wallet className="mr-1.5 h-3 w-3" />
-              {connecting ? "…" : "Hedera client id"}
-            </Button>
+            <div className="space-y-3 rounded-md border border-sidebar-border bg-background/40 p-3">
+              <div className="space-y-1">
+                <p className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground">Identity</p>
+                <p className="text-[10px] text-muted-foreground">
+                  Sign in with HashPack to create tasks and act as client, worker, or verifier.
+                </p>
+              </div>
+              <Button
+                size="sm"
+                className="h-8 w-full bg-primary text-[10px] font-semibold text-primary-foreground"
+                onClick={openAuthDialog}
+                disabled={busy}
+              >
+                {busy ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : <Wallet className="mr-1.5 h-3 w-3" />}
+                {busy ? "Authenticating" : "Sign in with HashPack"}
+              </Button>
+            </div>
           )}
           <p className="mt-2 text-center text-[9px] font-mono text-muted-foreground uppercase tracking-widest">
             Hedera Testnet

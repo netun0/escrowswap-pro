@@ -1,5 +1,6 @@
 
 import fs from "node:fs";
+import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadEnv } from "dotenv";
@@ -14,6 +15,8 @@ import {
   TokenId,
   TransferTransaction,
 } from "@hashgraph/sdk";
+import { proto } from "@hiero-ledger/proto";
+import { PublicKey } from "@hiero-ledger/sdk";
 import Long from "long";
 import { AgentMode, HederaBuilder, HederaLangchainToolkit } from "hedera-agent-kit";
 import { Contract, JsonRpcProvider, getAddress } from "ethers";
@@ -84,6 +87,30 @@ type LedgerSubmitResult = {
   error?: string;
 };
 
+type WalletSource = "hashpack";
+type SupportedNetwork = "testnet";
+
+type AuthenticatedUser = {
+  accountId: string;
+  walletSource: WalletSource;
+  network: SupportedNetwork;
+};
+
+type AuthChallenge = AuthenticatedUser & {
+  challengeId: string;
+  nonce: string;
+  issuedAt: string;
+  expiresAt: string;
+  expiresAtMs: number;
+  used: boolean;
+};
+
+type StoredSession = {
+  token: string;
+  user: AuthenticatedUser;
+  expiresAtMs: number;
+};
+
 function mergeLedgerTx(task: StoredTask, key: keyof NonNullable<StoredTask["ledgerTx"]>, txId: string | null | undefined): void {
   if (!txId) return;
   if (!task.ledgerTx) task.ledgerTx = {};
@@ -96,6 +123,9 @@ const TOPIC_ID = (process.env.HCS_TOPIC_ID || "").trim();
 const OPERATOR_ID = (process.env.HEDERA_ACCOUNT_ID || "").trim();
 const OPERATOR_KEY_RAW = (process.env.HEDERA_PRIVATE_KEY || "").trim();
 const DRY_RUN = process.env.HEDERA_DRY_RUN === "true" || process.env.HEDERA_DRY_RUN === "1";
+const SESSION_COOKIE_NAME = "escrowswap_session";
+const AUTH_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const AUTH_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const ESCROW_CONTRACT_ADDRESS = (process.env.ESCROW_CONTRACT_ADDRESS || "").trim();
 const HEDERA_EVM_RPC = (
   process.env.HEDERA_EVM_RPC ||
@@ -113,6 +143,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STORE_PATH = process.env.TASK_STORE_PATH?.trim() || path.join(__dirname, "..", "data", "tasks.json");
 
 const tasks = new Map<number, StoredTask>();
+const authChallenges = new Map<string, AuthChallenge>();
+const authSessions = new Map<string, StoredSession>();
 let nextId = 0;
 
 function loadStore(): void {
@@ -153,6 +185,166 @@ loadStore();
 
 function hederaAccountRegex(id: string): boolean {
   return /^\d+\.\d+\.\d+$/.test(id);
+}
+
+function sameAccount(a: string, b: string): boolean {
+  return a.trim() === b.trim();
+}
+
+function isWalletSource(value: unknown): value is WalletSource {
+  return value === "hashpack";
+}
+
+function isSupportedNetwork(value: unknown): value is SupportedNetwork {
+  return value === "testnet";
+}
+
+function buildAuthSignedMessage(challenge: AuthChallenge): string {
+  return [
+    "EscrowSwap Pro sign-in",
+    "",
+    `Account: ${challenge.accountId}`,
+    `Wallet: ${challenge.walletSource}`,
+    `Network: ${challenge.network}`,
+    `Challenge ID: ${challenge.challengeId}`,
+    `Nonce: ${challenge.nonce}`,
+    `Issued At: ${challenge.issuedAt}`,
+    `Expires At: ${challenge.expiresAt}`,
+    "",
+    "Only sign this message if you are connecting to EscrowSwap Pro.",
+  ].join("\n");
+}
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function prefixHederaSignedMessage(message: string): string {
+  return `\x19Hedera Signed Message:\n${message.length}${message}`;
+}
+
+function verifyHederaSignedMessage(message: string, base64SignatureMap: string, publicKey: PublicKey): boolean {
+  const signatureMap = proto.SignatureMap.decode(Buffer.from(base64SignatureMap, "base64"));
+  const signaturePair = signatureMap.sigPair?.[0];
+  const signature = signaturePair?.ed25519 ?? signaturePair?.ECDSASecp256k1;
+  if (!signature) {
+    throw new Error("Signature not found in signature map");
+  }
+
+  return publicKey.verify(Buffer.from(prefixHederaSignedMessage(message)), signature);
+}
+
+function cleanupExpiredAuthState(): void {
+  const now = Date.now();
+
+  for (const [id, challenge] of authChallenges.entries()) {
+    if (challenge.used || challenge.expiresAtMs <= now) {
+      authChallenges.delete(id);
+    }
+  }
+
+  for (const [token, session] of authSessions.entries()) {
+    if (session.expiresAtMs <= now) {
+      authSessions.delete(token);
+    }
+  }
+}
+
+function parseCookieHeader(header: string | undefined): Record<string, string> {
+  if (!header) return {};
+
+  return header.split(";").reduce<Record<string, string>>((acc, part) => {
+    const [rawKey, ...rest] = part.trim().split("=");
+    if (!rawKey || rest.length === 0) return acc;
+    acc[rawKey] = decodeURIComponent(rest.join("="));
+    return acc;
+  }, {});
+}
+
+function setSessionCookie(res: express.Response, token: string, expiresAtMs: number): void {
+  const maxAgeSeconds = Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000));
+  const attrs = ["Path=/", "HttpOnly", "SameSite=Lax", `Max-Age=${maxAgeSeconds}`];
+  if (process.env.NODE_ENV === "production") attrs.push("Secure");
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; ${attrs.join("; ")}`);
+}
+
+function clearSessionCookie(res: express.Response): void {
+  const attrs = ["Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"];
+  if (process.env.NODE_ENV === "production") attrs.push("Secure");
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE_NAME}=; ${attrs.join("; ")}`);
+}
+
+function getSessionFromRequest(req: express.Request): StoredSession | null {
+  cleanupExpiredAuthState();
+  const token = parseCookieHeader(req.headers.cookie)[SESSION_COOKIE_NAME];
+  if (!token) return null;
+  const session = authSessions.get(token);
+  if (!session) return null;
+  if (session.expiresAtMs <= Date.now()) {
+    authSessions.delete(token);
+    return null;
+  }
+  return session;
+}
+
+function requireAuthSession(req: express.Request, res: express.Response): StoredSession | null {
+  const session = getSessionFromRequest(req);
+  if (!session) {
+    res.status(401).json({ error: "Sign in with HashPack first." });
+    return null;
+  }
+  return session;
+}
+
+function requireTaskRole(
+  req: express.Request,
+  res: express.Response,
+  task: StoredTask,
+  roles: ("client" | "worker" | "verifier")[],
+): StoredSession | null {
+  const session = requireAuthSession(req, res);
+  if (!session) return null;
+
+  const authorized = roles.some((role) => sameAccount(task[role], session.user.accountId));
+  if (!authorized) {
+    res.status(403).json({ error: "Your signed-in Hedera account is not authorized for this task action." });
+    return null;
+  }
+
+  return session;
+}
+
+function mirrorNodeBaseUrl(network: SupportedNetwork): string {
+  return network === "testnet" ? "https://testnet.mirrornode.hedera.com" : "https://mainnet.mirrornode.hedera.com";
+}
+
+async function fetchAccountPublicKey(accountId: string, network: SupportedNetwork): Promise<PublicKey> {
+  const response = await fetch(`${mirrorNodeBaseUrl(network)}/api/v1/accounts/${accountId}`);
+  if (!response.ok) {
+    throw new Error(`Unable to fetch Hedera account key for ${accountId}.`);
+  }
+
+  const payload = (await response.json()) as {
+    key?: {
+      _type?: string;
+      key?: string;
+    };
+  };
+
+  const rawKey = payload.key?.key?.trim();
+  const rawType = payload.key?._type?.trim();
+  if (!rawKey || !rawType) {
+    throw new Error("Hedera account key is not available from the mirror node.");
+  }
+
+  if (rawType === "ED25519") {
+    return PublicKey.fromStringED25519(rawKey);
+  }
+  if (rawType === "ECDSA_SECP256K1") {
+    return PublicKey.fromStringECDSA(rawKey);
+  }
+
+  throw new Error(`Unsupported Hedera account key type: ${rawType}`);
 }
 
 function normalizeToken(t: string): string {
@@ -337,7 +529,7 @@ function serializeTask(t: StoredTask): Record<string, unknown> {
 }
 
 const app = express();
-app.use(cors({ origin: true }));
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
@@ -357,6 +549,139 @@ app.get("/health", (_req, res) => {
   });
 });
 
+app.post("/auth/nonce", (req, res) => {
+  cleanupExpiredAuthState();
+
+  const accountId = String((req.body as { accountId?: unknown })?.accountId ?? "").trim();
+  const walletSource = (req.body as { walletSource?: unknown })?.walletSource;
+  const network = (req.body as { network?: unknown })?.network;
+
+  if (!hederaAccountRegex(accountId)) {
+    return res.status(400).json({ error: "accountId must be a Hedera account id (0.0.x)" });
+  }
+  if (!isWalletSource(walletSource)) {
+    return res.status(400).json({ error: "walletSource must be hashpack" });
+  }
+  if (!isSupportedNetwork(network)) {
+    return res.status(400).json({ error: "network must be testnet" });
+  }
+
+  const now = Date.now();
+  const challenge: AuthChallenge = {
+    accountId,
+    challengeId: randomUUID(),
+    expiresAt: new Date(now + AUTH_CHALLENGE_TTL_MS).toISOString(),
+    expiresAtMs: now + AUTH_CHALLENGE_TTL_MS,
+    issuedAt: new Date(now).toISOString(),
+    network,
+    nonce: randomBytes(16).toString("hex"),
+    used: false,
+    walletSource,
+  };
+
+  authChallenges.set(challenge.challengeId, challenge);
+
+  res.status(201).json({
+    challengeId: challenge.challengeId,
+    nonce: challenge.nonce,
+    issuedAt: challenge.issuedAt,
+    expiresAt: challenge.expiresAt,
+  });
+});
+
+app.post("/auth/verify", async (req, res) => {
+  cleanupExpiredAuthState();
+
+  const challengeId = String((req.body as { challengeId?: unknown })?.challengeId ?? "").trim();
+  const accountId = String((req.body as { accountId?: unknown })?.accountId ?? "").trim();
+  const walletSource = (req.body as { walletSource?: unknown })?.walletSource;
+  const network = (req.body as { network?: unknown })?.network;
+  const signature = String((req.body as { signature?: unknown })?.signature ?? "").trim();
+  const signedPayload = String((req.body as { signedPayload?: unknown })?.signedPayload ?? "");
+
+  if (!challengeId || !signature || !signedPayload) {
+    return res.status(400).json({ error: "challengeId, signature, and signedPayload are required" });
+  }
+  if (!hederaAccountRegex(accountId)) {
+    return res.status(400).json({ error: "accountId must be a Hedera account id (0.0.x)" });
+  }
+  if (!isWalletSource(walletSource)) {
+    return res.status(400).json({ error: "walletSource must be hashpack" });
+  }
+  if (!isSupportedNetwork(network)) {
+    return res.status(400).json({ error: "network must be testnet" });
+  }
+
+  const challenge = authChallenges.get(challengeId);
+  if (!challenge || challenge.used) {
+    return res.status(400).json({ error: "Challenge is missing or already used." });
+  }
+  if (challenge.expiresAtMs <= Date.now()) {
+    authChallenges.delete(challengeId);
+    return res.status(400).json({ error: "Challenge expired. Request a fresh sign-in challenge." });
+  }
+  if (!sameAccount(challenge.accountId, accountId) || challenge.walletSource !== walletSource || challenge.network !== network) {
+    authChallenges.delete(challengeId);
+    return res.status(400).json({ error: "Challenge does not match the provided account or wallet details." });
+  }
+
+  const expectedPayload = buildAuthSignedMessage(challenge);
+  if (signedPayload !== expectedPayload) {
+    authChallenges.delete(challengeId);
+    return res.status(400).json({ error: "Signed payload mismatch." });
+  }
+
+  challenge.used = true;
+  authChallenges.set(challengeId, challenge);
+
+  try {
+    const publicKey = await fetchAccountPublicKey(accountId, network);
+    const valid = verifyHederaSignedMessage(expectedPayload, signature, publicKey);
+    if (!valid) {
+      authChallenges.delete(challengeId);
+      return res.status(401).json({ error: "Signature verification failed." });
+    }
+
+    const user: AuthenticatedUser = { accountId, walletSource, network };
+    const token = randomBytes(32).toString("hex");
+    const expiresAtMs = Date.now() + AUTH_SESSION_TTL_MS;
+    authSessions.set(token, { token, user, expiresAtMs });
+    authChallenges.delete(challengeId);
+    setSessionCookie(res, token, expiresAtMs);
+
+    return res.json({
+      user,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+    });
+  } catch (error) {
+    authChallenges.delete(challengeId);
+    console.error("auth verify failed", error);
+    return res.status(502).json({ error: readErrorMessage(error) });
+  }
+});
+
+app.get("/auth/session", (req, res) => {
+  const session = getSessionFromRequest(req);
+  if (!session) {
+    clearSessionCookie(res);
+    return res.json({ authenticated: false });
+  }
+
+  return res.json({
+    authenticated: true,
+    user: session.user,
+  });
+});
+
+app.post("/auth/logout", (req, res) => {
+  const token = parseCookieHeader(req.headers.cookie)[SESSION_COOKIE_NAME];
+  if (token) {
+    authSessions.delete(token);
+  }
+  clearSessionCookie(res);
+  res.status(204).end();
+});
+
 app.get("/tasks", (_req, res) => {
   res.json([...tasks.values()].sort((a, b) => a.id - b.id).map(serializeTask));
 });
@@ -369,8 +694,10 @@ app.get("/tasks/:id", (req, res) => {
 });
 
 app.post("/tasks", async (req, res) => {
+  const session = requireAuthSession(req, res);
+  if (!session) return;
+
   const {
-    clientId,
     worker,
     verifier,
     verifierMode = "human",
@@ -384,11 +711,11 @@ app.post("/tasks", async (req, res) => {
     maxBudget = 10000,
   } = req.body ?? {};
 
-  if (!clientId || !worker || !verifier || !paymentToken || amount == null || !workerPreferredToken) {
-    return res.status(400).json({ error: "clientId, worker, verifier, paymentToken, amount, workerPreferredToken required" });
+  if (!worker || !verifier || !paymentToken || amount == null || !workerPreferredToken) {
+    return res.status(400).json({ error: "worker, verifier, paymentToken, amount, workerPreferredToken required" });
   }
-  for (const label of ["clientId", "worker", "verifier"] as const) {
-    const v = label === "clientId" ? clientId : label === "worker" ? worker : verifier;
+  for (const label of ["worker", "verifier"] as const) {
+    const v = label === "worker" ? worker : verifier;
     if (!hederaAccountRegex(String(v))) {
       return res.status(400).json({ error: `${label} must be a Hedera account id (0.0.x)` });
     }
@@ -465,7 +792,7 @@ app.post("/tasks", async (req, res) => {
   const id = nextId++;
   const task: StoredTask = {
     id,
-    client: String(clientId),
+    client: session.user.accountId,
     worker: String(worker),
     verifier: String(verifier),
     verifierMode,
@@ -506,6 +833,7 @@ app.post("/tasks/:id/fund", async (req, res) => {
   const id = Number(req.params.id);
   const t = tasks.get(id);
   if (!t) return res.status(404).json({ error: "Task not found" });
+  if (!requireTaskRole(req, res, t, ["client"])) return;
   if (t.escrowContract) {
     return res.status(409).json({
       error:
@@ -538,6 +866,7 @@ app.post("/tasks/:id/submit", async (req, res) => {
   const id = Number(req.params.id);
   const t = tasks.get(id);
   if (!t) return res.status(404).json({ error: "Task not found" });
+  if (!requireTaskRole(req, res, t, ["worker"])) return;
   if (t.state !== "Funded") return res.status(400).json({ error: "Task not funded" });
 
   const outputURI = String((req.body as { outputURI?: string })?.outputURI || `ipfs://deliverable-${Date.now()}`);
@@ -561,6 +890,7 @@ app.post("/tasks/:id/verify", async (req, res) => {
   const id = Number(req.params.id);
   const t = tasks.get(id);
   if (!t) return res.status(404).json({ error: "Task not found" });
+  if (!requireTaskRole(req, res, t, ["verifier"])) return;
   if (t.state !== "Submitted") return res.status(400).json({ error: "Task not awaiting verification" });
 
   const approved = Boolean((req.body as { approved?: boolean })?.approved);
@@ -653,6 +983,7 @@ app.post("/tasks/:id/dispute", async (req, res) => {
   const id = Number(req.params.id);
   const t = tasks.get(id);
   if (!t) return res.status(404).json({ error: "Task not found" });
+  if (!requireTaskRole(req, res, t, ["client", "worker"])) return;
   if (!["Funded", "Submitted"].includes(t.state)) {
     return res.status(400).json({ error: "Task cannot be disputed in this state" });
   }

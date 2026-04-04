@@ -4,29 +4,30 @@ import { motion } from "framer-motion";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { TaskStateMachine } from "@/components/TaskStateMachine";
-import { useEscrow, useWallet } from "@/hooks/useEscrow";
+import { useEscrow } from "@/hooks/useEscrow";
 import { shortenAddress, formatAmount, getTokenSymbol, timeAgo, timeUntil } from "@/contracts/mockData";
 import { TASK_STATES, type TaskState } from "@/contracts/config";
 import { cn } from "@/lib/utils";
 import { Clock, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { useAuth } from "@/auth/useAuth";
+import { AuthRequiredCta } from "@/components/AuthRequiredCta";
 
 type RoleFilter = "mine" | "all" | "client" | "worker" | "verifier";
 
-const DEMO_FALLBACK_ADDR = "0.0.1001";
-
-function sameAccount(a: string, b: string): boolean {
+function sameAccount(a: string, b: string | null | undefined): boolean {
+  if (!b) return false;
   return a.trim() === b.trim();
 }
 
 export default function MyTasks() {
   const { tasks } = useEscrow();
-  const { address } = useWallet();
+  const { authenticated, user } = useAuth();
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("mine");
   const [stateFilter, setStateFilter] = useState<TaskState | "all">("all");
   const [search, setSearch] = useState("");
 
-  const userAddr = address ?? DEMO_FALLBACK_ADDR;
+  const userAddr = user?.accountId ?? null;
 
   const filtered = tasks.filter((t) => {
     const involved =
@@ -45,9 +46,15 @@ export default function MyTasks() {
       <div>
         <h1 className="text-2xl font-black tracking-tight">My Tasks</h1>
         <p className="mt-0.5 text-xs text-muted-foreground font-mono uppercase tracking-wider">
-          Default filter “Meus”: jobs where you are client, worker, or verifier · {shortenAddress(userAddr)}
+          {authenticated && userAddr
+            ? `Default filter “Mine”: jobs where you are client, worker, or verifier · ${shortenAddress(userAddr)}`
+            : "Sign in with HashPack to personalize task filters and role badges."}
         </p>
       </div>
+
+      {!authenticated && (
+        <AuthRequiredCta description="Browse all tasks publicly, or sign in with HashPack to filter the list against your Hedera account." />
+      )}
 
       {/* Search */}
       <div className="relative">
@@ -104,7 +111,11 @@ export default function MyTasks() {
       {/* Task list */}
       <div className="space-y-2">
         {filtered.length === 0 ? (
-          <p className="text-center text-xs text-muted-foreground py-10 font-mono">No tasks match your filters</p>
+          <p className="py-10 text-center font-mono text-xs text-muted-foreground">
+            {!authenticated && roleFilter !== "all"
+              ? "Sign in to use personal role filters."
+              : "No tasks match your filters"}
+          </p>
         ) : (
           filtered.map((task, i) => {
             const dl = timeUntil(task.deadline);
