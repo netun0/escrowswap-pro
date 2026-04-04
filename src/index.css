@@ -52,6 +52,7 @@
     --state-verified: 142 60% 55%;
     --state-paidout: 160 70% 45%;
     --state-refunded: 0 70% 50%;
+    --state-escrow-refund: 32 85% 52%;
     --state-disputed: 280 60% 55%;
   }
 

@@ -5,18 +5,11 @@
 # URL of the Hedera escrow API (`npm run dev:all` → http://localhost:3001)
 # VITE_HEDERA_API_URL=http://localhost:3001
 
-# Reown / WalletConnect project id for HashPack sign-in
-# VITE_WALLETCONNECT_PROJECT_ID=your-project-id
-
 # Optional: HTS token id shown as “USDC” in the token picker (testnet)
-# VITE_HEDERA_USDC_TOKEN_ID=0.0.429274
+# VITE_HEDERA_USDC_TOKEN_ID=0.0.456858
 
 # Optional: same as server HEDERA_ACCOUNT_ID — shows HashScan link for escrow funding on task page
 # VITE_HEDERA_OPERATOR_ID=0.0.x
-
-# On-chain ERC-20 escrow (Hedera EVM). When set on server (`ESCROW_CONTRACT_ADDRESS`), new tasks require HTS token + mirror evm_address; fund/release/refund are wallet-signed.
-# VITE_ESCROW_CONTRACT_ADDRESS=0x...
-# VITE_HEDERA_EVM_RPC=https://testnet.hashio.io/api
 
 # ----- Server (`server/` package) -----
 # HEDERA_NETWORK=testnet
@@ -29,10 +22,3 @@
 # TASK_STORE_PATH=/absolute/path/tasks.json
 # Skip real transfers / HCS submits (state machine only)
 # HEDERA_DRY_RUN=true
-
-# Hedera EVM — `HederaTaskEscrow` deployment (see `npm run deploy:escrow:testnet`)
-# ESCROW_CONTRACT_ADDRESS=0x...
-# Optional JSON-RPC (defaults to Hashio testnet/mainnet from HEDERA_NETWORK)
-# HEDERA_EVM_RPC=https://testnet.hashio.io/api
-# Optional mirror base for resolving 0.0.x → evm_address
-# HEDERA_MIRROR_BASE=https://testnet.mirrornode.hedera.com
