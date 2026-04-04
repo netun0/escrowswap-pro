@@ -10,6 +10,11 @@ import TaskDetail from "./pages/TaskDetail";
 import MyTasks from "./pages/MyTasks";
 import AgentMonitor from "./pages/AgentMonitor";
 import NotFound from "./pages/NotFound";
+import { HackathonLayout } from "@/hackathon/HackathonLayout";
+import HackathonIndex from "@/hackathon/pages/HackathonIndex";
+import LiveEvent from "@/hackathon/pages/LiveEvent";
+import Submissions from "@/hackathon/pages/Submissions";
+import AgentPipeline from "@/hackathon/pages/AgentPipeline";
 
 const queryClient = new QueryClient();
 
