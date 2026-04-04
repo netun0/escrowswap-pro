@@ -27,7 +27,6 @@ import {
   releaseOnChain,
   refundOnChain,
   getInjectedEip1193,
-  waitForReceipt,
 } from "@/lib/hederaEscrowContract";
 
 function idsEqual(a: string | null | undefined, b: string): boolean {
@@ -155,10 +154,10 @@ export default function TaskDetail() {
       if (!task.escrowContract) throw new Error("Not an on-chain escrow task.");
       await ensureHederaEvmChain(eth);
       const approveTx = await approveTokenForEscrow(task);
-      await waitForReceipt(approveTx);
+      await approveTx.wait();
       await assertClientHasTokenBalance(task);
       const fundTx = await fundTaskOnChain(task);
-      const rec = await waitForReceipt(fundTx);
+      const rec = await fundTx.wait();
       await syncOnChain(task.id, rec?.hash);
     }, "Funded on-chain — escrow locked");
 
@@ -168,7 +167,7 @@ export default function TaskDetail() {
       if (!eth) throw new Error("No injected wallet.");
       await ensureHederaEvmChain(eth);
       const tx = await releaseOnChain(task.id);
-      const rec = await waitForReceipt(tx);
+      const rec = await tx.wait();
       await syncOnChain(task.id, rec?.hash);
     }, "Released — tokens sent to worker");
 
@@ -178,7 +177,7 @@ export default function TaskDetail() {
       if (!eth) throw new Error("No injected wallet.");
       await ensureHederaEvmChain(eth);
       const tx = await refundOnChain(task.id);
-      const rec = await waitForReceipt(tx);
+      const rec = await tx.wait();
       await syncOnChain(task.id, rec?.hash);
     }, "Refunded — tokens returned to client");
 
