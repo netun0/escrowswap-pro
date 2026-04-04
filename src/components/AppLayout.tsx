@@ -56,7 +56,20 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               </Link>
             );
           })}
-        </nav>
+
+          <div className="border-t border-sidebar-border my-2 mx-1" />
+          <Link
+            to="/hackathon"
+            className={cn(
+              "flex items-center gap-2.5 px-3 py-2 text-xs font-medium transition-colors",
+              location.pathname.startsWith("/hackathon")
+                ? "bg-accent/10 text-accent border-l-2 border-accent"
+                : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-foreground border-l-2 border-transparent"
+            )}
+          >
+            <Trophy className="h-3.5 w-3.5" />
+            Hackathon OS
+          </Link>
 
         <div className="border-t border-sidebar-border p-3">
           {address ? (
