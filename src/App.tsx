@@ -30,6 +30,10 @@ const App = () => (
           <Route path="/task/:id" element={<AppLayout><TaskDetail /></AppLayout>} />
           <Route path="/tasks" element={<AppLayout><MyTasks /></AppLayout>} />
           <Route path="/agents" element={<AppLayout><AgentMonitor /></AppLayout>} />
+          <Route path="/hackathon" element={<HackathonLayout><HackathonIndex /></HackathonLayout>} />
+          <Route path="/hackathon/live" element={<HackathonLayout><LiveEvent /></HackathonLayout>} />
+          <Route path="/hackathon/submissions" element={<HackathonLayout><Submissions /></HackathonLayout>} />
+          <Route path="/hackathon/agents" element={<HackathonLayout><AgentPipeline /></HackathonLayout>} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
