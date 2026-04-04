@@ -11,23 +11,30 @@ import { cn } from "@/lib/utils";
 import { Clock, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
-type RoleFilter = "all" | "client" | "worker" | "verifier";
+type RoleFilter = "mine" | "all" | "client" | "worker" | "verifier";
 
 const DEMO_FALLBACK_ADDR = "0.0.1001";
+
+function sameAccount(a: string, b: string): boolean {
+  return a.trim() === b.trim();
+}
 
 export default function MyTasks() {
   const { tasks } = useEscrow();
   const { address } = useWallet();
-  const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>("mine");
   const [stateFilter, setStateFilter] = useState<TaskState | "all">("all");
   const [search, setSearch] = useState("");
 
-  const userAddr = (address ?? DEMO_FALLBACK_ADDR).toLowerCase();
+  const userAddr = address ?? DEMO_FALLBACK_ADDR;
 
   const filtered = tasks.filter((t) => {
-    if (roleFilter === "client" && t.client.toLowerCase() !== userAddr) return false;
-    if (roleFilter === "worker" && t.worker.toLowerCase() !== userAddr) return false;
-    if (roleFilter === "verifier" && t.verifier.toLowerCase() !== userAddr) return false;
+    const involved =
+      sameAccount(t.client, userAddr) || sameAccount(t.worker, userAddr) || sameAccount(t.verifier, userAddr);
+    if (roleFilter === "mine" && !involved) return false;
+    if (roleFilter === "client" && !sameAccount(t.client, userAddr)) return false;
+    if (roleFilter === "worker" && !sameAccount(t.worker, userAddr)) return false;
+    if (roleFilter === "verifier" && !sameAccount(t.verifier, userAddr)) return false;
     if (stateFilter !== "all" && t.state !== stateFilter) return false;
     if (search && !t.description.toLowerCase().includes(search.toLowerCase()) && !t.capabilities.some(c => c.toLowerCase().includes(search.toLowerCase()))) return false;
     return true;
@@ -38,7 +45,7 @@ export default function MyTasks() {
       <div>
         <h1 className="text-2xl font-black tracking-tight">My Tasks</h1>
         <p className="mt-0.5 text-xs text-muted-foreground font-mono uppercase tracking-wider">
-          Browse and filter your jobs
+          Default filter “Meus”: jobs where you are client, worker, or verifier · {shortenAddress(userAddr)}
         </p>
       </div>
 
@@ -56,7 +63,7 @@ export default function MyTasks() {
       {/* Filters */}
       <div className="flex flex-wrap gap-3">
         <div className="flex gap-0.5 border border-border p-0.5">
-          {(["all", "client", "worker", "verifier"] as RoleFilter[]).map((r) => (
+          {(["mine", "all", "client", "worker", "verifier"] as RoleFilter[]).map((r) => (
             <Button
               key={r}
               variant={roleFilter === r ? "default" : "ghost"}
@@ -67,7 +74,7 @@ export default function MyTasks() {
               )}
               onClick={() => setRoleFilter(r)}
             >
-              {r === "all" ? "All Roles" : r}
+              {r === "mine" ? "Meus" : r === "all" ? "Todos" : r}
             </Button>
           ))}
         </div>
@@ -145,13 +152,13 @@ export default function MyTasks() {
                         </div>
                         <div className="flex flex-col items-end gap-1.5">
                           <div className="flex items-center gap-2">
-                            {task.client.toLowerCase() === userAddr && (
+                            {sameAccount(task.client, userAddr) && (
                               <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 bg-secondary text-secondary-foreground uppercase">Client</span>
                             )}
-                            {task.worker.toLowerCase() === userAddr && (
+                            {sameAccount(task.worker, userAddr) && (
                               <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 bg-secondary text-secondary-foreground uppercase">Worker</span>
                             )}
-                            {task.verifier.toLowerCase() === userAddr && (
+                            {sameAccount(task.verifier, userAddr) && (
                               <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 bg-secondary text-secondary-foreground uppercase">Verifier</span>
                             )}
                           </div>

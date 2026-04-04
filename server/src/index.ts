@@ -1,4 +1,7 @@
 import "dotenv/config";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import cors from "cors";
 import express from "express";
 import {
@@ -43,7 +46,30 @@ type StoredTask = {
   expiresAt: number;
   maxBudget: number;
   capabilities: string[];
+  ledgerTx?: Partial<{
+    created: string;
+    funded: string;
+    submitted: string;
+    rejected: string;
+    dispute: string;
+    settlement: string;
+    paidAudit: string;
+  }>;
 };
+
+type LedgerSubmitResult = {
+  ok: boolean;
+  transactionId: string | null;
+  topicSequenceNumber: string | null;
+  reason?: "no_topic" | "dry_run_no_key" | "error";
+  error?: string;
+};
+
+function mergeLedgerTx(task: StoredTask, key: keyof NonNullable<StoredTask["ledgerTx"]>, txId: string | null | undefined): void {
+  if (!txId) return;
+  if (!task.ledgerTx) task.ledgerTx = {};
+  task.ledgerTx[key] = txId;
+}
 
 const PORT = Number(process.env.PORT || 3001);
 const NETWORK = (process.env.HEDERA_NETWORK || "testnet").toLowerCase();
@@ -52,8 +78,48 @@ const OPERATOR_ID = (process.env.HEDERA_ACCOUNT_ID || "").trim();
 const OPERATOR_KEY_RAW = (process.env.HEDERA_PRIVATE_KEY || "").trim();
 const DRY_RUN = process.env.HEDERA_DRY_RUN === "true" || process.env.HEDERA_DRY_RUN === "1";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+/** Writable task snapshot (default: `server/data/tasks.json`). */
+const STORE_PATH = process.env.TASK_STORE_PATH?.trim() || path.join(__dirname, "..", "data", "tasks.json");
+
 const tasks = new Map<number, StoredTask>();
 let nextId = 0;
+
+function loadStore(): void {
+  try {
+    const raw = fs.readFileSync(STORE_PATH, "utf8");
+    const data = JSON.parse(raw) as { tasks?: StoredTask[]; nextId?: number };
+    if (!Array.isArray(data.tasks)) return;
+    tasks.clear();
+    let maxId = -1;
+    for (const t of data.tasks) {
+      tasks.set(t.id, t);
+      maxId = Math.max(maxId, t.id);
+    }
+    const storedNext = typeof data.nextId === "number" ? data.nextId : 0;
+    nextId = Math.max(storedNext, maxId + 1);
+    console.log(`Loaded ${tasks.size} task(s) from ${STORE_PATH}`);
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code !== "ENOENT") console.warn("task store load:", err.message);
+  }
+}
+
+function persistStore(): void {
+  try {
+    const dir = path.dirname(STORE_PATH);
+    fs.mkdirSync(dir, { recursive: true });
+    const payload = {
+      tasks: [...tasks.values()].sort((a, b) => a.id - b.id),
+      nextId,
+    };
+    fs.writeFileSync(STORE_PATH, JSON.stringify(payload, null, 2), "utf8");
+  } catch (e) {
+    console.error("task store persist failed:", e);
+  }
+}
+
+loadStore();
 
 function hederaAccountRegex(id: string): boolean {
   return /^\d+\.\d+\.\d+$/.test(id);
@@ -105,23 +171,45 @@ if (toolkit) {
   console.log(`hedera-agent-kit: ${toolkit.getTools().length} core tools available (REST uses SDK directly).`);
 }
 
-async function appendHcs(event: Record<string, unknown>): Promise<string | null> {
+if (!TOPIC_ID) {
+  console.warn(
+    "[ledger] HCS_TOPIC_ID is not set — create / fund / submit will not write TopicMessageSubmitTransaction. Set a topic id for visible audit txs on HashScan.",
+  );
+}
+if (DRY_RUN) {
+  console.warn("[ledger] HEDERA_DRY_RUN=true — transfers and HCS submits are skipped (no paid transactions).");
+}
+if (!OPERATOR_KEY_RAW || !OPERATOR_ID) {
+  console.warn("[ledger] Operator key/account missing — Hedera transactions are disabled until .env is configured.");
+}
+
+async function appendHcs(event: Record<string, unknown>): Promise<LedgerSubmitResult> {
+  const label = String(event.type ?? "event");
   if (!TOPIC_ID) {
-    console.warn("HCS_TOPIC_ID not set; skipping consensus log.");
-    return null;
+    console.warn(`[ledger] skip HCS (${label}): set HCS_TOPIC_ID`);
+    return { ok: false, transactionId: null, topicSequenceNumber: null, reason: "no_topic" };
   }
   if (DRY_RUN || !OPERATOR_KEY_RAW) {
-    return `dry-run-hcs-${Date.now()}`;
+    console.warn(`[ledger] skip HCS (${label}): DRY_RUN or missing HEDERA_PRIVATE_KEY`);
+    return { ok: false, transactionId: null, topicSequenceNumber: null, reason: "dry_run_no_key" };
   }
-  const tx = HederaBuilder.submitTopicMessage({
-    topicId: TOPIC_ID,
-    message: JSON.stringify(event),
-    transactionMemo: String(event.type ?? "event"),
-  });
-  const res = await tx.execute(client);
-  const receipt = await res.getReceipt(client);
-  const sid = receipt.topicSequenceNumber?.toString();
-  return sid ? `${TOPIC_ID}@${sid}` : res.transactionId.toString();
+  try {
+    const tx = HederaBuilder.submitTopicMessage({
+      topicId: TOPIC_ID,
+      message: JSON.stringify(event),
+      transactionMemo: label.slice(0, 100),
+    });
+    const res = await tx.execute(client);
+    const receipt = await res.getReceipt(client);
+    const txId = res.transactionId.toString();
+    const seq = receipt.topicSequenceNumber?.toString() ?? null;
+    console.log(`[ledger] HCS ok ${label} | tx=${txId} | topicSeq=${seq ?? "?"}`);
+    return { ok: true, transactionId: txId, topicSequenceNumber: seq };
+  } catch (e) {
+    const msg = (e as Error).message;
+    console.error(`[ledger] HCS failed (${label}):`, msg);
+    return { ok: false, transactionId: null, topicSequenceNumber: null, reason: "error", error: msg };
+  }
 }
 
 async function settleHbar(task: StoredTask): Promise<string> {
@@ -176,6 +264,11 @@ app.get("/health", (_req, res) => {
     operatorConfigured: Boolean(OPERATOR_ID && OPERATOR_KEY_RAW),
     hcsTopic: TOPIC_ID || null,
     dryRun: DRY_RUN,
+    ledgerHints: {
+      hcsMessagesNeedTopic: !TOPIC_ID,
+      transfersNeedKeysAndNotDryRun: DRY_RUN || !OPERATOR_KEY_RAW,
+      settlementOnApprove: !(DRY_RUN || !OPERATOR_KEY_RAW),
+    },
   });
 });
 
@@ -190,7 +283,7 @@ app.get("/tasks/:id", (req, res) => {
   res.json(serializeTask(t));
 });
 
-app.post("/tasks", (req, res) => {
+app.post("/tasks", async (req, res) => {
   const {
     clientId,
     worker,
@@ -264,8 +357,14 @@ app.post("/tasks", (req, res) => {
     capabilities: Array.isArray(capabilities) ? capabilities.map(String) : [],
   };
   tasks.set(id, task);
+  persistStore();
 
-  void appendHcs({ type: "created", taskId: id, at: now, task: serializeTask(task) }).catch(console.error);
+  const hcs = await appendHcs({ type: "created", taskId: id, at: now, task: serializeTask(task) });
+  if (hcs.ok && hcs.transactionId) {
+    mergeLedgerTx(task, "created", hcs.transactionId);
+    tasks.set(id, task);
+    persistStore();
+  }
 
   res.status(201).json(serializeTask(task));
 });
@@ -280,9 +379,19 @@ app.post("/tasks/:id/fund", async (req, res) => {
   t.state = "Funded";
   t.fundedAt = now;
   tasks.set(id, t);
+  persistStore();
 
-  const seq = await appendHcs({ type: "funded", taskId: id, at: now, note: (req.body as { note?: string })?.note });
-  res.json({ task: serializeTask(t), hcsSequence: seq });
+  const hcs = await appendHcs({ type: "funded", taskId: id, at: now, note: (req.body as { note?: string })?.note });
+  if (hcs.ok && hcs.transactionId) {
+    mergeLedgerTx(t, "funded", hcs.transactionId);
+    tasks.set(id, t);
+    persistStore();
+  }
+  res.json({
+    task: serializeTask(t),
+    hcsSequence: hcs.topicSequenceNumber,
+    transactionId: hcs.transactionId,
+  });
 });
 
 app.post("/tasks/:id/submit", async (req, res) => {
@@ -297,9 +406,15 @@ app.post("/tasks/:id/submit", async (req, res) => {
   t.submittedAt = now;
   t.outputURI = outputURI;
   tasks.set(id, t);
+  persistStore();
 
-  const seq = await appendHcs({ type: "submitted", taskId: id, at: now, outputURI });
-  res.json({ task: serializeTask(t), hcsSequence: seq });
+  const hcs = await appendHcs({ type: "submitted", taskId: id, at: now, outputURI });
+  if (hcs.ok && hcs.transactionId) {
+    mergeLedgerTx(t, "submitted", hcs.transactionId);
+    tasks.set(id, t);
+    persistStore();
+  }
+  res.json({ task: serializeTask(t), hcsSequence: hcs.topicSequenceNumber, transactionId: hcs.transactionId });
 });
 
 app.post("/tasks/:id/verify", async (req, res) => {
@@ -315,8 +430,14 @@ app.post("/tasks/:id/verify", async (req, res) => {
     t.state = "Refunded";
     t.verifiedAt = now;
     tasks.set(id, t);
-    const seq = await appendHcs({ type: "rejected", taskId: id, at: now });
-    return res.json({ task: serializeTask(t), hcsSequence: seq });
+    persistStore();
+    const hcs = await appendHcs({ type: "rejected", taskId: id, at: now });
+    if (hcs.ok && hcs.transactionId) {
+      mergeLedgerTx(t, "rejected", hcs.transactionId);
+      tasks.set(id, t);
+      persistStore();
+    }
+    return res.json({ task: serializeTask(t), hcsSequence: hcs.topicSequenceNumber, transactionId: hcs.transactionId });
   }
 
   try {
@@ -330,12 +451,24 @@ app.post("/tasks/:id/verify", async (req, res) => {
     }
 
     const txId = await settleToWorker(t);
+    mergeLedgerTx(t, "settlement", txId);
     t.state = "PaidOut";
     t.verifiedAt = now;
     t.completedAt = now;
     tasks.set(id, t);
-    const seq = await appendHcs({ type: "paid", taskId: id, at: now, settlementTxId: txId });
-    return res.json({ task: serializeTask(t), settlementTxId: txId, hcsSequence: seq });
+    persistStore();
+    const hcs = await appendHcs({ type: "paid", taskId: id, at: now, settlementTxId: txId });
+    if (hcs.ok && hcs.transactionId) {
+      mergeLedgerTx(t, "paidAudit", hcs.transactionId);
+      tasks.set(id, t);
+      persistStore();
+    }
+    return res.json({
+      task: serializeTask(t),
+      settlementTxId: txId,
+      hcsSequence: hcs.topicSequenceNumber,
+      paidAuditTransactionId: hcs.transactionId,
+    });
   } catch (e) {
     console.error("settlement failed", e);
     return res.status(500).json({ error: (e as Error).message || "Settlement failed" });
@@ -351,10 +484,17 @@ app.post("/tasks/:id/dispute", async (req, res) => {
   }
   t.state = "Disputed";
   tasks.set(id, t);
-  const seq = await appendHcs({ type: "dispute", taskId: id, at: Date.now() / 1000 });
-  res.json({ task: serializeTask(t), hcsSequence: seq });
+  persistStore();
+  const hcs = await appendHcs({ type: "dispute", taskId: id, at: Date.now() / 1000 });
+  if (hcs.ok && hcs.transactionId) {
+    mergeLedgerTx(t, "dispute", hcs.transactionId);
+    tasks.set(id, t);
+    persistStore();
+  }
+  res.json({ task: serializeTask(t), hcsSequence: hcs.topicSequenceNumber, transactionId: hcs.transactionId });
 });
 
 app.listen(PORT, () => {
   console.log(`Hedera escrow API listening on http://localhost:${PORT}`);
+  console.log(`Task store: ${STORE_PATH}`);
 });

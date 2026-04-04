@@ -7,7 +7,7 @@ import { useEscrow, useWallet } from "@/hooks/useEscrow";
 import { shortenAddress, formatAmount, getTokenSymbol, timeUntil, MOCK_AUDIT_EVENTS } from "@/contracts/mockData";
 import { ArrowLeft, ExternalLink, Copy, Clock, Shield, AlertTriangle, Loader2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
-import { CHAIN_CONFIG, VERIFIER_MODE_LABELS } from "@/contracts/config";
+import { CHAIN_CONFIG, VERIFIER_MODE_LABELS, hashscanTransactionUrl, type TaskLedgerTx } from "@/contracts/config";
 import { ESCROW_USE_MOCK } from "@/contracts/env";
 
 function idsEqual(a: string | null | undefined, b: string): boolean {
@@ -21,6 +21,16 @@ function mirrorAccountUrl(accountId: string): string {
   }
   return CHAIN_CONFIG.blockExplorer;
 }
+
+const LEDGER_LABELS: { key: keyof TaskLedgerTx; label: string }[] = [
+  { key: "created", label: "Created (HCS message)" },
+  { key: "funded", label: "Funded (HCS)" },
+  { key: "submitted", label: "Submitted (HCS)" },
+  { key: "rejected", label: "Rejected (HCS)" },
+  { key: "dispute", label: "Dispute (HCS)" },
+  { key: "settlement", label: "Payout transfer (HBAR / HTS)" },
+  { key: "paidAudit", label: "Paid audit (HCS)" },
+];
 
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>();
@@ -219,6 +229,69 @@ export default function TaskDetail() {
               <p className="text-[9px] text-muted-foreground uppercase font-mono">Output URI</p>
               <p className="font-mono text-[10px] text-primary mt-1 break-all">{task.outputURI}</p>
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Hedera transactions</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {!ESCROW_USE_MOCK && (
+            <p className="text-[9px] text-muted-foreground font-mono leading-relaxed">
+              Job create / fund / submit write <strong>HCS</strong> when <code className="text-foreground">HCS_TOPIC_ID</code> is set.
+              <strong> Approve &amp; Pay</strong> runs a <strong>transfer</strong> (needs operator keys and{" "}
+              <code className="text-foreground">HEDERA_DRY_RUN=false</code>). Watch the API terminal for{" "}
+              <code className="text-foreground">[ledger]</code> lines.
+            </p>
+          )}
+          {(import.meta.env.VITE_HEDERA_OPERATOR_ID as string | undefined)?.trim() && task.state === "Open" && (
+            <p className="text-[9px] font-mono text-muted-foreground">
+              Operator (escrow) account:{" "}
+              <a
+                className="text-primary underline"
+                href={mirrorAccountUrl((import.meta.env.VITE_HEDERA_OPERATOR_ID as string).trim())}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {(import.meta.env.VITE_HEDERA_OPERATOR_ID as string).trim()}
+              </a>
+            </p>
+          )}
+          {LEDGER_LABELS.filter(({ key }) => task.ledgerTx?.[key]).length === 0 ? (
+            <p className="text-[10px] text-muted-foreground font-mono py-2">
+              {ESCROW_USE_MOCK
+                ? "Mock mode — no live Hedera transactions."
+                : "No transaction ids stored yet. Configure server: HCS_TOPIC_ID, HEDERA_ACCOUNT_ID, HEDERA_PRIVATE_KEY, and turn off HEDERA_DRY_RUN."}
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {LEDGER_LABELS.map(({ key, label }) => {
+                const txId = task.ledgerTx?.[key];
+                if (!txId) return null;
+                const isDry = txId.startsWith("dry-run");
+                const href = isDry ? undefined : hashscanTransactionUrl(txId);
+                return (
+                  <li key={key} className="flex flex-col gap-0.5 border-b border-border/60 pb-2 last:border-0 last:pb-0">
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">{label}</span>
+                    <span className="font-mono text-[10px] break-all text-foreground">{txId}</span>
+                    {href ? (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-primary inline-flex items-center gap-1 w-fit"
+                      >
+                        Open in HashScan <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                    ) : (
+                      <span className="text-[9px] text-amber-600 font-mono">Simulated id (not on chain)</span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </CardContent>
       </Card>

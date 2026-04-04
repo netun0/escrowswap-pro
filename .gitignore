@@ -8,6 +8,8 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+server/data/tasks.json
+
 hardhat/cache
 hardhat/artifacts
 dist
