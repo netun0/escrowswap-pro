@@ -11,6 +11,12 @@ const ERC20_ABI = ["function approve(address spender, uint256 amount) external r
 
 const HTS_TOKEN_ASSOCIATE_ABI = ["function associate() external"] as const;
 
+/**
+ * Hedera EVM `eth_estimateGas` is unreliable for HTS precompile calls
+ * (long-zero token addresses). Hardcoded gas limits bypass estimation.
+ */
+const HEDERA_GAS = { gasLimit: 1_500_000 } as const;
+
 function requireEnvEscrow(): { contractAddress: string; rpcUrl: string } {
   const contractAddress = (import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS as string | undefined)?.trim() ?? "";
   const rpcUrl = (import.meta.env.VITE_HEDERA_EVM_RPC as string | undefined)?.trim() ?? "https://testnet.hashio.io/api";
@@ -140,14 +146,21 @@ export async function associateHtsToken(tokenEvm: string): Promise<void> {
   const signer = await getBrowserProvider().getSigner();
   const token = new Contract(tokenEvm, HTS_TOKEN_ASSOCIATE_ABI, signer);
   try {
-    const tx = await withRetry(() => token.associate() as Promise<import("ethers").TransactionResponse>);
+    const tx = await withRetry(() => token.associate(HEDERA_GAS) as Promise<import("ethers").TransactionResponse>);
     await tx.wait();
   } catch (e: unknown) {
     if (isUserRejected(e)) throw e;
-    console.warn(
-      "HTS associate() did not complete (often already associated). If approve still fails, associate the token in your wallet.",
-      e,
-    );
+    const msg = String((e as { message?: string }).message ?? "").toLowerCase();
+    const alreadyAssociated =
+      msg.includes("already associated") ||
+      msg.includes("token_already_associated") ||
+      msg.includes("precompile") ||
+      msg.includes("contract_revert_executed");
+    if (alreadyAssociated) {
+      console.info("HTS token already associated — continuing.");
+    } else {
+      console.warn("HTS associate() failed. If approve still fails, associate the token manually in your wallet.", e);
+    }
   }
 }
 
@@ -158,7 +171,7 @@ export async function approveTokenForEscrow(task: Task): Promise<import("ethers"
   await associateHtsToken(task.tokenEvm);
   const signer = await getBrowserProvider().getSigner();
   const token = new Contract(task.tokenEvm, ERC20_ABI, signer);
-  return withRetry(() => token.approve(contractAddress, task.amount) as Promise<import("ethers").TransactionResponse>);
+  return withRetry(() => token.approve(contractAddress, task.amount, HEDERA_GAS) as Promise<import("ethers").TransactionResponse>);
 }
 
 export async function fundTaskOnChain(task: Task): Promise<import("ethers").TransactionResponse> {
@@ -170,7 +183,7 @@ export async function fundTaskOnChain(task: Task): Promise<import("ethers").Tran
   const signer = await getBrowserProvider().getSigner();
   const escrow = new Contract(contractAddress, ESCROW_WRITE_ABI, signer);
   return withRetry(() =>
-    escrow.fundTask(BigInt(task.id), task.workerEvm, task.verifierEvm, task.tokenEvm, task.amount) as Promise<
+    escrow.fundTask(BigInt(task.id), task.workerEvm, task.verifierEvm, task.tokenEvm, task.amount, HEDERA_GAS) as Promise<
       import("ethers").TransactionResponse
     >,
   );
@@ -180,12 +193,12 @@ export async function releaseOnChain(taskId: number): Promise<import("ethers").T
   const { contractAddress } = requireEnvEscrow();
   const signer = await getBrowserProvider().getSigner();
   const escrow = new Contract(contractAddress, ESCROW_WRITE_ABI, signer);
-  return withRetry(() => escrow.release(BigInt(taskId)) as Promise<import("ethers").TransactionResponse>);
+  return withRetry(() => escrow.release(BigInt(taskId), HEDERA_GAS) as Promise<import("ethers").TransactionResponse>);
 }
 
 export async function refundOnChain(taskId: number): Promise<import("ethers").TransactionResponse> {
   const { contractAddress } = requireEnvEscrow();
   const signer = await getBrowserProvider().getSigner();
   const escrow = new Contract(contractAddress, ESCROW_WRITE_ABI, signer);
-  return withRetry(() => escrow.refund(BigInt(taskId)) as Promise<import("ethers").TransactionResponse>);
+  return withRetry(() => escrow.refund(BigInt(taskId), HEDERA_GAS) as Promise<import("ethers").TransactionResponse>);
 }
