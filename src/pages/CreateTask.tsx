@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useEscrow, useWallet } from "@/hooks/useEscrow";
 import { TOKENS, VERIFIER_MODE_LABELS, type VerifierMode } from "@/contracts/config";
-import { ESCROW_USE_MOCK, HEDERA_API_URL } from "@/contracts/env";
+import { ESCROW_USE_MOCK, HEDERA_API_URL, ONCHAIN_ESCROW_ENABLED } from "@/contracts/env";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
@@ -25,11 +25,17 @@ function defaultDeadlineLocal(daysAhead = 7): string {
   return toDatetimeLocalValue(d);
 }
 
+const defaultEscrowSymbol = ONCHAIN_ESCROW_ENABLED ? "USDC" : "HBAR";
+
 export default function CreateTask() {
   const navigate = useNavigate();
   const { createTask, txPending } = useEscrow();
   const { address: clientId } = useWallet();
   const [loading, setLoading] = useState(false);
+
+  const tokenChoices = ONCHAIN_ESCROW_ENABLED
+    ? Object.values(TOKENS).filter((t) => t.address !== "HBAR")
+    : Object.values(TOKENS);
 
   const [form, setForm] = useState({
     description: "",
@@ -37,11 +43,19 @@ export default function CreateTask() {
     worker: "",
     verifier: "",
     verifierMode: "human" as VerifierMode,
-    paymentToken: "HBAR",
+    paymentToken: defaultEscrowSymbol,
     amount: "",
-    workerPreferredToken: "HBAR",
+    workerPreferredToken: defaultEscrowSymbol,
     deadlineLocal: defaultDeadlineLocal(7),
   });
+
+  useEffect(() => {
+    if (!ONCHAIN_ESCROW_ENABLED) return;
+    setForm((prev) => {
+      if (prev.paymentToken !== "HBAR" && prev.workerPreferredToken !== "HBAR") return prev;
+      return { ...prev, paymentToken: "USDC", workerPreferredToken: "USDC" };
+    });
+  }, []);
 
   const updateField = (field: string, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -61,6 +75,10 @@ export default function CreateTask() {
       const deadlineUnix = deadlineMs / 1000;
       const nowSec = Date.now() / 1000;
       if (deadlineUnix <= nowSec) throw new Error("Deadline must be in the future");
+
+      if (ONCHAIN_ESCROW_ENABLED && (tokenMeta.address === "HBAR" || workerTokenMeta.address === "HBAR")) {
+        throw new Error("On-chain escrow requires an HTS token (e.g. USDC). HBAR is not supported.");
+      }
 
       if (!ESCROW_USE_MOCK && tokenMeta.address !== workerTokenMeta.address) {
         throw new Error(
@@ -95,7 +113,9 @@ export default function CreateTask() {
       <div>
         <h1 className="text-2xl font-black tracking-tight">Create a Job</h1>
         <p className="mt-0.5 text-xs text-muted-foreground font-mono uppercase tracking-wider">
-          Describe what you need · assign agents · fund the operator escrow on Hedera
+          {ONCHAIN_ESCROW_ENABLED
+            ? "Describe what you need · HTS ERC-20 locked in HederaTaskEscrow (verifier signs release/refund)"
+            : "Describe what you need · assign agents · fund the operator escrow on Hedera"}
         </p>
       </div>
 
@@ -105,7 +125,10 @@ export default function CreateTask() {
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-bold uppercase tracking-wider">What do you need?</CardTitle>
               <CardDescription className="text-xs">
-                Describe the task in plain language. Settlement is HBAR or HTS on Hedera Testnet via the demo operator.
+                Describe the task in plain language.
+                {ONCHAIN_ESCROW_ENABLED
+                  ? " Escrow is on-chain (HTS ERC-20) via HederaTaskEscrow on testnet EVM."
+                  : " Settlement is HBAR or HTS on Hedera Testnet via the demo operator."}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -209,8 +232,19 @@ export default function CreateTask() {
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-bold uppercase tracking-wider">Budget & Deadline</CardTitle>
               <CardDescription className="text-xs">
-                Amount is held by the operator account after you mark funded; verifier approval triggers HTS/HBAR transfer to
-                the worker.
+                {ONCHAIN_ESCROW_ENABLED ? (
+                  <>
+                    Escrow uses your configured HTS token with an EVM address. After create, fund via{" "}
+                    <span className="font-mono text-foreground">approve</span> +{" "}
+                    <span className="font-mono text-foreground">fundTask</span> on Hedera EVM (chain 296). Verifier signs{" "}
+                    <span className="font-mono text-foreground">release</span> or <span className="font-mono text-foreground">refund</span>.
+                  </>
+                ) : (
+                  <>
+                  Amount is held by the operator account after you mark funded; verifier approval triggers HTS/HBAR transfer to
+                  the worker.
+                  </>
+                )}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -222,16 +256,31 @@ export default function CreateTask() {
                   Connect your Hedera client id in the sidebar — it is sent as `clientId` when creating the task.
                 </p>
               )}
+              {ONCHAIN_ESCROW_ENABLED && (
+                <p className="text-[10px] text-muted-foreground font-mono border border-border/80 bg-muted/25 px-2 py-1.5 leading-relaxed">
+                  HBAR is hidden: the server has <span className="text-foreground">ESCROW_CONTRACT_ADDRESS</span> set. Use an HTS token that exposes{" "}
+                  <span className="text-foreground">evm_address</span> on the mirror (default USDC: {TOKENS.USDC.address}).
+                </p>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <Label className="text-[10px] uppercase tracking-wider">Escrow token</Label>
-                  <Select value={form.paymentToken} onValueChange={(v) => updateField("paymentToken", v)}>
+                  <Select
+                    value={form.paymentToken}
+                    onValueChange={(v) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        paymentToken: v,
+                        workerPreferredToken: ONCHAIN_ESCROW_ENABLED ? v : prev.workerPreferredToken,
+                      }))
+                    }
+                  >
                     <SelectTrigger>
                       <SelectValue placeholder="Token" />
                     </SelectTrigger>
                     <SelectContent>
-                      {Object.values(TOKENS).map((t) => (
+                      {tokenChoices.map((t) => (
                         <SelectItem key={t.symbol} value={t.symbol}>
                           <span className="flex items-center gap-2">
                             <span className="h-2 w-2 rounded-full" style={{ backgroundColor: t.logoColor }} />
@@ -276,24 +325,35 @@ export default function CreateTask() {
 
               <div className="space-y-1.5">
                 <Label className="text-[10px] uppercase tracking-wider">Worker payout token</Label>
-                <Select value={form.workerPreferredToken} onValueChange={(v) => updateField("workerPreferredToken", v)}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Same as escrow" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.values(TOKENS).map((t) => (
-                      <SelectItem key={`p-${t.symbol}`} value={t.symbol}>
-                        <span className="flex items-center gap-2">
-                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: t.logoColor }} />
-                          {t.symbol}
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-[9px] text-muted-foreground font-mono">
-                  Must match escrow token for live API settlement (HBAR→HBAR or identical HTS id).
-                </p>
+                {ONCHAIN_ESCROW_ENABLED ? (
+                  <>
+                    <p className="text-xs font-mono font-semibold text-foreground py-2 px-3 rounded-md border border-border bg-muted/20">
+                      {form.paymentToken} <span className="text-muted-foreground font-normal">— same as escrow (required)</span>
+                    </p>
+                    <p className="text-[9px] text-muted-foreground font-mono">Contract escrow only supports a single ERC-20 per task.</p>
+                  </>
+                ) : (
+                  <>
+                    <Select value={form.workerPreferredToken} onValueChange={(v) => updateField("workerPreferredToken", v)}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Same as escrow" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.values(TOKENS).map((t) => (
+                          <SelectItem key={`p-${t.symbol}`} value={t.symbol}>
+                            <span className="flex items-center gap-2">
+                              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: t.logoColor }} />
+                              {t.symbol}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-[9px] text-muted-foreground font-mono">
+                      Must match escrow token for live API settlement (HBAR→HBAR or identical HTS id).
+                    </p>
+                  </>
+                )}
               </div>
             </CardContent>
           </Card>

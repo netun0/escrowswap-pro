@@ -162,6 +162,11 @@ function normalizeToken(t: string): string {
   return s;
 }
 
+function hexToChecksumAddr(hex: string): string {
+  const h = hex.startsWith("0x") ? hex : `0x${hex}`;
+  return getAddress(h);
+}
+
 async function mirrorAccountEvm(accountId: string): Promise<string | null> {
   try {
     const r = await fetch(`${MIRROR_BASE}/api/v1/accounts/${accountId}`);
@@ -175,17 +180,28 @@ async function mirrorAccountEvm(accountId: string): Promise<string | null> {
   }
 }
 
-async function mirrorTokenEvm(tokenId: string): Promise<string | null> {
+/** HTS ERC-20 `token()` address on Hedera EVM (long zero) when mirror omits `evm_address`. */
+function htsTokenToEvmAddress(tokenId: string): string | null {
   try {
-    const r = await fetch(`${MIRROR_BASE}/api/v1/tokens/${tokenId}`);
-    if (!r.ok) return null;
-    const j = (await r.json()) as { evm_address?: string | null };
-    const raw = j.evm_address?.trim();
-    if (!raw) return null;
-    return getAddress(raw);
+    const raw = TokenId.fromString(tokenId).toEvmAddress();
+    return hexToChecksumAddr(raw);
   } catch {
     return null;
   }
+}
+
+async function mirrorTokenEvm(tokenId: string): Promise<string | null> {
+  try {
+    const r = await fetch(`${MIRROR_BASE}/api/v1/tokens/${tokenId}`);
+    if (r.ok) {
+      const j = (await r.json()) as { evm_address?: string | null };
+      const raw = j.evm_address?.trim();
+      if (raw) return getAddress(raw);
+    }
+  } catch {
+    /* use HTS fallback */
+  }
+  return htsTokenToEvmAddress(tokenId);
 }
 
 function addrEq(a: string, b: string): boolean {
@@ -425,9 +441,18 @@ app.post("/tasks", async (req, res) => {
       mirrorTokenEvm(payTok),
     ]);
     if (!ce || !we || !ve || !te) {
+      const missing: string[] = [];
+      if (!ce) missing.push("client");
+      if (!we) missing.push("worker");
+      if (!ve) missing.push("verifier");
+      if (!te) missing.push("token");
       return res.status(400).json({
         error:
-          "Could not resolve mirror `evm_address` for client, worker, verifier, or token. Use accounts with EVM aliases and an HTS token that exposes an EVM address.",
+          "Could not resolve Hedera EVM address for all task participants. Accounts need a mirror `evm_address` (ECDSA / alias wallet). Tokens use mirror `evm_address` or the HTS long-zero address.",
+        missingEvmFor: missing,
+        mirrorBase: MIRROR_BASE,
+        hint:
+          "Use real testnet accounts in MetaMask/HashPack (not placeholder 0.0.1001). Ensure `HEDERA_NETWORK` / `HEDERA_MIRROR_BASE` match your accounts. Token id must exist on that network (e.g. USDC 0.0.429274 on testnet).",
       });
     }
     escrowContract = true;

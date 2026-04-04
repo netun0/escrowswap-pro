@@ -5,7 +5,7 @@ async function main() {
   console.log("Deployer EVM:", deployer.address);
 
   const F = await hre.ethers.getContractFactory("HederaTaskEscrow");
-  const c = await F.deploy();
+  const c = await F.deploy({ gasLimit: 10000000 });
   await c.waitForDeployment();
   const addr = await c.getAddress();
   console.log("HederaTaskEscrow:", addr);

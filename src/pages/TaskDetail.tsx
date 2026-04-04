@@ -1,4 +1,6 @@
 import { useParams, Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { BrowserProvider, getAddress } from "ethers";
 import { motion } from "framer-motion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -18,6 +20,7 @@ import { ESCROW_USE_MOCK } from "@/contracts/env";
 import {
   ensureHederaEvmChain,
   approveTokenForEscrow,
+  assertClientHasTokenBalance,
   fundTaskOnChain,
   releaseOnChain,
   refundOnChain,
@@ -54,6 +57,33 @@ export default function TaskDetail() {
   const { tasks, advanceState, txPending, syncOnChain } = useEscrow();
   const { address } = useWallet();
   const task = tasks.find((t) => t.id === Number(id));
+  const [browserEvm, setBrowserEvm] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!task?.escrowContract || task.state !== "Open" || !task.clientEvm) {
+      setBrowserEvm(null);
+      return;
+    }
+    let cancel = false;
+    (async () => {
+      try {
+        const eth = getInjectedEip1193();
+        if (!eth) {
+          if (!cancel) setBrowserEvm(null);
+          return;
+        }
+        const provider = new BrowserProvider(eth);
+        const signer = await provider.getSigner();
+        const a = getAddress(await signer.getAddress());
+        if (!cancel) setBrowserEvm(a);
+      } catch {
+        if (!cancel) setBrowserEvm(null);
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [task?.id, task?.escrowContract, task?.state, task?.clientEvm]);
 
   if (!task) {
     return (
@@ -83,6 +113,13 @@ export default function TaskDetail() {
   const isVerifier = idsEqual(address, task.verifier);
   const humanVerifier = task.verifierMode === "human";
   const autonomousVerifier = task.verifierMode === "autonomous";
+  const evmClientWalletMismatch = Boolean(
+    task.escrowContract &&
+      task.state === "Open" &&
+      task.clientEvm &&
+      browserEvm &&
+      getAddress(browserEvm) !== getAddress(task.clientEvm),
+  );
 
   const runTx = async (fn: () => Promise<void>, okTitle: string) => {
     try {
@@ -108,6 +145,7 @@ export default function TaskDetail() {
       await ensureHederaEvmChain(eth);
       const approveTx = await approveTokenForEscrow(task);
       await approveTx.wait();
+      await assertClientHasTokenBalance(task);
       const fundTx = await fundTaskOnChain(task);
       const rec = await fundTx.wait();
       await syncOnChain(task.id, rec?.hash);
@@ -430,13 +468,21 @@ export default function TaskDetail() {
             )}
           </CardHeader>
           <CardContent className="flex flex-col gap-3 p-3 pt-0">
+            {evmClientWalletMismatch && (
+                <p className="text-[10px] text-amber-700 dark:text-amber-400 border border-amber-500/40 bg-amber-500/10 px-3 py-2 rounded-md font-mono leading-relaxed">
+                  <strong>Wrong EVM wallet.</strong> Browser wallet is {shortenAddress(browserEvm)} but this task&apos;s client is{" "}
+                  {shortenAddress(task.clientEvm)}. Switch MetaMask (or HashPack) to the <em>client</em> account — the contract pulls
+                  tokens from <code className="text-foreground">msg.sender</code>.{" "}
+                  <span className="opacity-90">(Carteira errada: use a conta do cliente que criou o job.)</span>
+                </p>
+              )}
             <div className="flex flex-wrap gap-2">
               {task.state === "Open" && (
                 <>
                   {task.escrowContract && !ESCROW_USE_MOCK ? (
                     <Button
                       className="bg-primary text-primary-foreground font-bold text-xs uppercase tracking-wider"
-                      disabled={!isClient || txPending}
+                      disabled={!isClient || txPending || evmClientWalletMismatch}
                       onClick={runFundOnChain}
                     >
                       {txPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
@@ -527,8 +573,9 @@ export default function TaskDetail() {
                 {task.escrowContract && !ESCROW_USE_MOCK ? (
                   <>
                     Connect a wallet on <strong>Hedera Testnet EVM</strong> (chain 296) with the <strong>same keys as your 0.0.x</strong>{" "}
-                    client account. Approve the HTS token, then <code className="text-foreground">fundTask</code> locks tokens in the
-                    escrow contract.
+                    client account. The app sends <code className="text-foreground">associate()</code> on the HTS token if needed, then{" "}
+                    <code className="text-foreground">approve</code> + <code className="text-foreground">fundTask</code>. You need a token
+                    balance and HBAR for gas.
                   </>
                 ) : (
                   <>

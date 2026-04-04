@@ -1,4 +1,4 @@
-import { BrowserProvider, Contract, type Eip1193Provider } from "ethers";
+import { BrowserProvider, Contract, getAddress, type Eip1193Provider } from "ethers";
 import type { Task } from "@/contracts/config";
 
 const ESCROW_WRITE_ABI = [
@@ -8,6 +8,9 @@ const ESCROW_WRITE_ABI = [
 ] as const;
 
 const ERC20_ABI = ["function approve(address spender, uint256 amount) external returns (bool)"] as const;
+
+/** HTS-native ERC-20 facade: must be called once per account before approve/transfer. */
+const HTS_TOKEN_ASSOCIATE_ABI = ["function associate() external"] as const;
 
 function requireEnvEscrow(): { contractAddress: string; rpcUrl: string } {
   const contractAddress = (import.meta.env.VITE_ESCROW_CONTRACT_ADDRESS as string | undefined)?.trim() ?? "";
@@ -56,9 +59,66 @@ export function getBrowserProvider(): BrowserProvider {
   return new BrowserProvider(ethereum);
 }
 
+function isUserRejected(e: unknown): boolean {
+  const err = e as { code?: number | string; message?: string };
+  if (err.code === "ACTION_REJECTED" || err.code === 4001) return true;
+  const m = (err.message ?? "").toLowerCase();
+  return m.includes("user rejected") || m.includes("user denied");
+}
+
+/**
+ * Links the signer's Hedera account to the HTS token on the ledger. Required before approve/transferFrom.
+ * No-ops safely if the token is already associated (typical empty revert from the precompile).
+ */
+/**
+ * `fundTask` sets `client = msg.sender` and pulls tokens from the caller. Only the task client EVM may fund.
+ */
+export async function assertFundingWalletIsClient(task: Task): Promise<void> {
+  if (!task.clientEvm) throw new Error("Task missing clientEvm");
+  const signer = await getBrowserProvider().getSigner();
+  const wallet = getAddress(await signer.getAddress());
+  const expected = getAddress(task.clientEvm);
+  if (wallet !== expected) {
+    throw new Error(
+      `Wrong EVM wallet: you must use the CLIENT account (who created the task). Expected ${expected}, connected ${wallet}. The worker cannot sign fund — the contract pulls USDC from msg.sender.`,
+    );
+  }
+}
+
+export async function assertClientHasTokenBalance(task: Task): Promise<void> {
+  if (!task.tokenEvm) throw new Error("Task missing tokenEvm");
+  const provider = getBrowserProvider();
+  const signer = await provider.getSigner();
+  const me = getAddress(await signer.getAddress());
+  const token = new Contract(task.tokenEvm, ["function balanceOf(address) view returns (uint256)"], provider);
+  const bal: bigint = await token.balanceOf(me);
+  if (bal < task.amount) {
+    throw new Error(
+      `Insufficient token balance: need at least ${task.amount} (smallest units), have ${bal}. Send the escrow token to the client wallet ${me} first.`,
+    );
+  }
+}
+
+export async function associateHtsToken(tokenEvm: string): Promise<void> {
+  const signer = await getBrowserProvider().getSigner();
+  const token = new Contract(tokenEvm, HTS_TOKEN_ASSOCIATE_ABI, signer);
+  try {
+    const tx = await token.associate();
+    await tx.wait();
+  } catch (e: unknown) {
+    if (isUserRejected(e)) throw e;
+    console.warn(
+      "HTS associate() did not complete (often already associated). If approve still fails, associate the token in your wallet.",
+      e,
+    );
+  }
+}
+
 export async function approveTokenForEscrow(task: Task): Promise<import("ethers").TransactionResponse> {
   const { contractAddress } = requireEnvEscrow();
   if (!task.tokenEvm) throw new Error("Task missing tokenEvm");
+  await assertFundingWalletIsClient(task);
+  await associateHtsToken(task.tokenEvm);
   const provider = getBrowserProvider();
   const signer = await provider.getSigner();
   const token = new Contract(task.tokenEvm, ERC20_ABI, signer);
@@ -70,6 +130,7 @@ export async function fundTaskOnChain(task: Task): Promise<import("ethers").Tran
   if (!task.workerEvm || !task.verifierEvm || !task.tokenEvm) {
     throw new Error("Task missing EVM addresses for fundTask");
   }
+  await assertFundingWalletIsClient(task);
   const provider = getBrowserProvider();
   const signer = await provider.getSigner();
   const escrow = new Contract(contractAddress, ESCROW_WRITE_ABI, signer);

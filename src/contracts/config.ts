@@ -1,7 +1,7 @@
 // Hedera Testnet — operator escrow + HCS audit (see `server/`)
 
 const usdcTokenId =
-  (import.meta.env.VITE_HEDERA_USDC_TOKEN_ID as string | undefined)?.trim() || "0.0.456858";
+  (import.meta.env.VITE_HEDERA_USDC_TOKEN_ID as string | undefined)?.trim() || "0.0.429274";
 
 export const CHAIN_CONFIG = {
   chainId: 296,
