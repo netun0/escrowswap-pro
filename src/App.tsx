@@ -35,6 +35,7 @@ const App = () => (
           <Route path="/hackathon/live" element={<HackathonLayout><LiveEvent /></HackathonLayout>} />
           <Route path="/hackathon/submissions" element={<HackathonLayout><Submissions /></HackathonLayout>} />
           <Route path="/hackathon/agents" element={<HackathonLayout><AgentPipeline /></HackathonLayout>} />
+          <Route path="/hackathon/create" element={<HackathonLayout><CreateHackathon /></HackathonLayout>} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
