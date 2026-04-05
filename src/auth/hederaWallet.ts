@@ -5,10 +5,13 @@ import {
   HederaChainDefinition,
   HederaProvider,
   hederaNamespace,
+  transactionToBase64String,
 } from "@hashgraph/hedera-wallet-connect";
+import { TokenAssociateTransaction } from "@hiero-ledger/sdk";
 import type { ConnectedWalletInfo } from "@reown/appkit-controllers";
 
 import type { HederaNetwork } from "@/auth/auth-message";
+import type { NativeAssociationResult } from "@/auth/types";
 
 const PROJECT_ID = (import.meta.env.VITE_WALLETCONNECT_PROJECT_ID as string | undefined)?.trim() ?? "";
 
@@ -18,6 +21,7 @@ type WalletListener = (state: HederaWalletState) => void;
 
 export type HederaWalletState = {
   accountId: string | null;
+  canExecuteNativeTransactions: boolean;
   signerAccountId: string | null;
   connected: boolean;
   network: HederaNetwork | null;
@@ -26,6 +30,7 @@ export type HederaWalletState = {
 };
 
 export type HederaWalletClient = {
+  associateToken: (accountId: string, tokenId: string) => Promise<NativeAssociationResult>;
   disconnect: () => Promise<void>;
   ensureConnected: (timeoutMs?: number) => Promise<HederaWalletState>;
   getState: () => HederaWalletState;
@@ -64,6 +69,7 @@ function buildWalletState(provider: HederaProvider, walletInfo?: ConnectedWallet
 
   return {
     accountId,
+    canExecuteNativeTransactions: Boolean(accountId && network),
     signerAccountId,
     connected: Boolean(accountId && network),
     network,
@@ -113,6 +119,9 @@ async function createWalletClient(): Promise<HederaWalletClient> {
   })) as unknown as UniversalProvider;
 
   const appKit = createAppKit({
+    // This client is only used for HashPack auth + native HTS actions.
+    // Keeping AppKit on the Hedera namespace avoids WalletConnect sessions
+    // that pair only the EVM side and never expose a hedera:testnet account.
     adapters: [nativeAdapter],
     // @ts-expect-error upstream typings still lag universal provider support for Hedera
     universalProvider,
@@ -183,6 +192,27 @@ async function createWalletClient(): Promise<HederaWalletClient> {
     disconnect: async () => {
       await appKit.disconnect(hederaNamespace);
       notify();
+    },
+    associateToken: async (accountId, tokenId) => {
+      const signerAccountId = getSignerAccountId(provider);
+      const state = getState();
+      if (!signerAccountId || !state.connected || !state.accountId) {
+        throw new Error("Connect HashPack before associating an HTS token.");
+      }
+      if (state.network !== "testnet") {
+        throw new Error("HashPack must be connected to Hedera Testnet.");
+      }
+      if (state.accountId !== accountId) {
+        throw new Error(`HashPack is connected to ${state.accountId}. Switch to ${accountId} before associating this token.`);
+      }
+
+      const transaction = new TokenAssociateTransaction().setAccountId(accountId).setTokenIds([tokenId]);
+      const result = await provider.hedera_signAndExecuteTransaction({
+        signerAccountId,
+        transactionList: transactionToBase64String(transaction),
+      });
+
+      return { transactionId: result.transactionId };
     },
     ensureConnected: async (timeoutMs?: number) => {
       const current = getState();

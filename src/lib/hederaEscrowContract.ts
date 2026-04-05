@@ -17,8 +17,6 @@ const ONCHAIN_STATUS = { none: 0, funded: 1, released: 2, refunded: 3 } as const
 
 const ERC20_ABI = ["function approve(address spender, uint256 amount) external returns (bool)"] as const;
 
-const HTS_TOKEN_ASSOCIATE_ABI = ["function associate() external"] as const;
-
 /**
  * Hedera EVM `eth_estimateGas` is unreliable for HTS precompile calls
  * (long-zero token addresses). Hardcoded gas limits bypass estimation.
@@ -64,6 +62,74 @@ async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
   throw last;
 }
 
+type RpcTxPayload = Partial<{
+  to: string;
+  from: string;
+  data: string;
+}>;
+
+type RpcPayload = Partial<{
+  method: string;
+  params: unknown[];
+}>;
+
+export type NativeAssociationActions = Partial<{
+  associateToken: (accountId: string, tokenId: string) => Promise<{ transactionId: string }>;
+  canExecuteNativeTransactions: boolean;
+}>;
+
+function extractRpcPayloadTx(payload: RpcPayload | undefined): RpcTxPayload | undefined {
+  const first = payload?.params?.[0];
+  return typeof first === "object" && first ? (first as RpcTxPayload) : undefined;
+}
+
+function extractRpcErrorContext(e: unknown): {
+  rpcCode?: number | string;
+  rpcMessage?: string;
+  method?: string;
+  tx?: RpcTxPayload;
+} {
+  const err = e as {
+    code?: number | string;
+    error?: { code?: number | string; message?: string };
+    info?: { error?: { code?: number | string; message?: string }; payload?: RpcPayload };
+    payload?: RpcPayload;
+  };
+  const nested = err.info?.error ?? err.error;
+  const payload = err.info?.payload ?? err.payload;
+  return {
+    rpcCode: nested?.code ?? err.code,
+    rpcMessage: nested?.message,
+    method: payload?.method,
+    tx: extractRpcPayloadTx(payload),
+  };
+}
+
+function isHederaLongZeroAddress(address: string | undefined): boolean {
+  return typeof address === "string" && /^0x0{24,}[0-9a-fA-F]{1,16}$/.test(address);
+}
+
+function isHederaTokenId(tokenId: string): boolean {
+  return /^\d+\.\d+\.\d+$/.test(tokenId.trim());
+}
+
+function formatRpcClientError(e: unknown, hint: string): Error | null {
+  const { rpcCode, rpcMessage, method, tx } = extractRpcErrorContext(e);
+  const lowerRpc = (rpcMessage ?? "").toLowerCase();
+  if (!lowerRpc.includes("rpc endpoint returned http client error")) return null;
+  const txMethod = method === "eth_sendTransaction" ? "wallet send" : method ? `${method} request` : "wallet request";
+  let detail =
+    `${hint}: Hedera RPC rejected the ${txMethod} before broadcast. ` +
+    "Confirm the wallet is on Hedera Testnet (chain 296), the configured RPC URL is healthy, and the token is already associated to the funding wallet.";
+  if (tx?.from) detail += ` Wallet: ${tx.from}.`;
+  if (tx?.to) detail += ` Target: ${tx.to}.`;
+  if (isHederaLongZeroAddress(tx?.to)) {
+    detail += " This token is using Hedera's long-zero EVM address format; if your wallet/provider rejects it consistently, use a token whose mirror node exposes `evm_address`.";
+  }
+  if (rpcCode !== undefined) detail += ` RPC code: ${rpcCode}.`;
+  return new Error(detail);
+}
+
 /** Switch or add MetaMask / injected wallet to Hedera Testnet (296). Does not require `VITE_ESCROW_CONTRACT_ADDRESS`. */
 export async function ensureHederaTestnetEvmChain(ethereum: Eip1193Provider): Promise<void> {
   const rpcUrl = defaultHederaTestnetRpc();
@@ -78,7 +144,7 @@ export async function ensureHederaTestnetEvmChain(ethereum: Eip1193Provider): Pr
         {
           chainId: HEDERA_TESTNET_CHAIN_HEX,
           chainName: "Hedera Testnet",
-          nativeCurrency: { name: "HBAR", symbol: "HBAR", decimals: 18 },
+          nativeCurrency: { name: "HBAR", symbol: "HBAR", decimals: 8 },
           rpcUrls: [rpcUrl],
           blockExplorerUrls: ["https://hashscan.io/testnet"],
         },
@@ -116,6 +182,11 @@ export function getBrowserProvider(): BrowserProvider {
   return provider;
 }
 
+async function getFundingWalletAddress(): Promise<string> {
+  const signer = await getBrowserProvider().getSigner();
+  return getAddress(await signer.getAddress());
+}
+
 function isUserRejected(e: unknown): boolean {
   const err = e as { code?: number | string; message?: string };
   if (err.code === "ACTION_REJECTED" || err.code === 4001) return true;
@@ -125,6 +196,8 @@ function isUserRejected(e: unknown): boolean {
 
 function formatEscrowSendError(e: unknown, hint: string): Error {
   if (isUserRejected(e)) return e instanceof Error ? e : new Error(String(e));
+  const rpcClientError = formatRpcClientError(e, hint);
+  if (rpcClientError) return rpcClientError;
   const msg = String(
     (e as { shortMessage?: string; message?: string }).shortMessage ?? (e as Error).message ?? e,
   );
@@ -150,6 +223,19 @@ function formatEscrowSendError(e: unknown, hint: string): Error {
     );
   }
   return new Error(`${hint}. ${msg}`);
+}
+
+async function readAllowance(task: Task): Promise<bigint> {
+  const { contractAddress } = requireEnvEscrow();
+  if (!task.tokenEvm) throw new Error("Task missing tokenEvm");
+  const provider = getBrowserProvider();
+  const me = await getFundingWalletAddress();
+  const token = new Contract(
+    task.tokenEvm,
+    ["function allowance(address owner, address spender) view returns (uint256)"],
+    provider,
+  );
+  return withRetry(() => token.allowance(me, contractAddress) as Promise<bigint>);
 }
 
 async function readEscrowTaskRow(taskId: bigint): Promise<{
@@ -192,17 +278,7 @@ export async function assertEscrowTaskIsFundable(task: Task): Promise<void> {
 }
 
 async function assertAllowanceCoversFund(task: Task): Promise<void> {
-  const { contractAddress } = requireEnvEscrow();
-  if (!task.tokenEvm) throw new Error("Task missing tokenEvm");
-  const provider = getBrowserProvider();
-  const signer = await provider.getSigner();
-  const me = getAddress(await signer.getAddress());
-  const token = new Contract(
-    task.tokenEvm,
-    ["function allowance(address owner, address spender) view returns (uint256)"],
-    provider,
-  );
-  const allowance: bigint = await withRetry(() => token.allowance(me, contractAddress) as Promise<bigint>);
+  const allowance = await readAllowance(task);
   if (allowance < task.amount) {
     throw new Error(
       `Allowance too low before fundTask: need at least ${task.amount} (smallest units), currently ${allowance}. Finish the approve step first.`,
@@ -211,16 +287,11 @@ async function assertAllowanceCoversFund(task: Task): Promise<void> {
 }
 
 /**
- * Links the signer's Hedera account to the HTS token on the ledger. Required before approve/transferFrom.
- * No-ops safely if the token is already associated (typical empty revert from the precompile).
- */
-/**
  * `fundTask` sets `client = msg.sender` and pulls tokens from the caller. Only the task client EVM may fund.
  */
 export async function assertFundingWalletIsClient(task: Task): Promise<void> {
   if (!task.clientEvm) throw new Error("Task missing clientEvm");
-  const signer = await getBrowserProvider().getSigner();
-  const wallet = getAddress(await signer.getAddress());
+  const wallet = await getFundingWalletAddress();
   const expected = getAddress(task.clientEvm);
   if (wallet !== expected) {
     throw new Error(
@@ -232,8 +303,7 @@ export async function assertFundingWalletIsClient(task: Task): Promise<void> {
 export async function assertClientHasTokenBalance(task: Task): Promise<void> {
   if (!task.tokenEvm) throw new Error("Task missing tokenEvm");
   const provider = getBrowserProvider();
-  const signer = await provider.getSigner();
-  const me = getAddress(await signer.getAddress());
+  const me = await getFundingWalletAddress();
   const token = new Contract(task.tokenEvm, ["function balanceOf(address) view returns (uint256)"], provider);
   const bal: bigint = await withRetry(() => token.balanceOf(me) as Promise<bigint>);
   if (bal < task.amount) {
@@ -246,8 +316,7 @@ export async function assertClientHasTokenBalance(task: Task): Promise<void> {
 async function isTokenAssociated(tokenEvm: string): Promise<boolean> {
   try {
     const provider = getBrowserProvider();
-    const signer = await provider.getSigner();
-    const me = getAddress(await signer.getAddress());
+    const me = await getFundingWalletAddress();
     const token = new Contract(tokenEvm, ["function balanceOf(address) view returns (uint256)"], provider);
     await token.balanceOf(me);
     return true;
@@ -256,37 +325,85 @@ async function isTokenAssociated(tokenEvm: string): Promise<boolean> {
   }
 }
 
-export async function associateHtsToken(tokenEvm: string): Promise<void> {
-  if (await isTokenAssociated(tokenEvm)) return;
-  const signer = await getBrowserProvider().getSigner();
-  const token = new Contract(tokenEvm, HTS_TOKEN_ASSOCIATE_ABI, signer);
-  try {
-    const tx = await withRetry(() => token.associate(HEDERA_GAS) as Promise<TransactionResponse>);
-    await tx.wait();
-  } catch (e: unknown) {
-    if (isUserRejected(e)) throw e;
-    const msg = String((e as { message?: string }).message ?? "").toLowerCase();
-    const alreadyAssociated =
-      msg.includes("already associated") ||
-      msg.includes("token_already_associated") ||
-      msg.includes("precompile") ||
-      msg.includes("contract_revert_executed");
-    if (alreadyAssociated) {
-      console.info("HTS token already associated — continuing.");
-    } else {
-      console.warn("HTS associate() failed. If approve still fails, associate the token manually in your wallet.", e);
-    }
-  }
+function hasNativeAssociationActions(actions: NativeAssociationActions | undefined): actions is Required<NativeAssociationActions> {
+  return Boolean(actions?.canExecuteNativeTransactions && actions.associateToken);
 }
 
-export async function approveTokenForEscrow(task: Task): Promise<TransactionResponse> {
+async function waitForTokenAssociation(tokenEvm: string, attempts = 4, delayMs = 1_250): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (await isTokenAssociated(tokenEvm)) return true;
+    if (attempt < attempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return false;
+}
+
+/**
+ * Hedera token association is a native HTS operation, so only wallets with Hedera-native signing
+ * support (HashPack via WalletConnect in this app) can perform it in-app.
+ */
+async function ensureHtsTokenAssociation(task: Task, nativeAssociation?: NativeAssociationActions): Promise<void> {
+  if (!task.tokenEvm) throw new Error("Task missing tokenEvm");
+  const wallet = await getFundingWalletAddress();
+  if (await isTokenAssociated(task.tokenEvm)) return;
+
+  if (!isHederaTokenId(task.paymentToken)) {
+    throw new Error(
+      `On-chain escrow expected paymentToken to be a Hedera token id (0.0.x), received ${task.paymentToken}. Recreate the task with a real Hedera token id.`,
+    );
+  }
+
+  if (!hasNativeAssociationActions(nativeAssociation)) {
+    throw new Error(
+      `HTS token ${task.paymentToken} (${task.tokenEvm}) is not associated to client wallet ${wallet} for Hedera account ${task.client}. MetaMask / injected EVM wallets cannot associate HTS tokens in this flow. Sign in with HashPack to associate it in-app, or associate the token manually in your wallet before retrying.`,
+    );
+  }
+
+  let transactionId: string | undefined;
+  try {
+    const result = await nativeAssociation.associateToken(task.client, task.paymentToken);
+    transactionId = result.transactionId;
+  } catch (e: unknown) {
+    if (isUserRejected(e)) throw e;
+    const msg = String(
+      (e as { shortMessage?: string; message?: string }).shortMessage ?? (e as Error).message ?? e,
+    );
+    throw new Error(
+      `HTS association failed for token ${task.paymentToken} on Hedera account ${task.client} / wallet ${wallet}. ${msg}`,
+    );
+  }
+
+  if (await waitForTokenAssociation(task.tokenEvm)) return;
+
+  throw new Error(
+    `HashPack submitted token association for ${task.paymentToken} on Hedera account ${task.client}, but wallet ${wallet} still does not show the token as associated. Wait for transaction ${transactionId ?? "pending"} to finalize on HashScan, then retry funding.`,
+  );
+}
+
+export async function approveTokenForEscrow(
+  task: Task,
+  nativeAssociation?: NativeAssociationActions,
+): Promise<TransactionResponse | null> {
   const { contractAddress } = requireEnvEscrow();
   if (!task.tokenEvm) throw new Error("Task missing tokenEvm");
   await assertFundingWalletIsClient(task);
-  await associateHtsToken(task.tokenEvm);
+  await ensureHtsTokenAssociation(task, nativeAssociation);
+  await assertClientHasTokenBalance(task);
+  const allowance = await readAllowance(task);
+  if (allowance >= task.amount) return null;
   const signer = await getBrowserProvider().getSigner();
   const token = new Contract(task.tokenEvm, ERC20_ABI, signer);
-  return withRetry(() => token.approve(contractAddress, task.amount, HEDERA_GAS) as Promise<TransactionResponse>);
+  try {
+    await withRetry(() => token.approve.staticCall(contractAddress, task.amount, HEDERA_GAS) as Promise<boolean>);
+  } catch (e: unknown) {
+    throw formatEscrowSendError(e, "approve would revert");
+  }
+  try {
+    return await withRetry(() => token.approve(contractAddress, task.amount, HEDERA_GAS) as Promise<TransactionResponse>);
+  } catch (e: unknown) {
+    throw formatEscrowSendError(e, "approve send failed");
+  }
 }
 
 export async function fundTaskOnChain(task: Task): Promise<TransactionResponse> {

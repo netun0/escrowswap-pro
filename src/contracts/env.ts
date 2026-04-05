@@ -1,8 +1,8 @@
-/** When true or unset, the UI uses `src/contracts/mockData` and skips the Hedera API. */
+/** Legacy toggle for the old escrow demo. The treasury app expects live API mode by default. */
 export const ESCROW_USE_MOCK =
   typeof import.meta.env.VITE_ESCROW_USE_MOCK === "string"
-    ? import.meta.env.VITE_ESCROW_USE_MOCK !== "false"
-    : true;
+    ? import.meta.env.VITE_ESCROW_USE_MOCK === "true"
+    : false;
 
 /** Base URL for the Node Hedera escrow API (e.g. `http://localhost:3001`). */
 export const HEDERA_API_URL = (import.meta.env.VITE_HEDERA_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";

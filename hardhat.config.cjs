@@ -1,11 +1,11 @@
 require("dotenv").config();
-require("@nomicfoundation/hardhat-toolbox");
+require("@nomicfoundation/hardhat-ethers");
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
   solidity: {
-    version: "0.8.20",
-    settings: { optimizer: { enabled: true, runs: 200 } },
+    version: "0.8.28",
+    settings: { optimizer: { enabled: true, runs: 200 }, viaIR: true, evmVersion: "cancun" },
   },
   paths: {
     sources: "./contracts",

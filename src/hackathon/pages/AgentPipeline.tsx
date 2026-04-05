@@ -1,218 +1,351 @@
-import { MOCK_AGENT_ACTIVITY } from "../mockData";
-import { useHackathonList } from "../HackathonListContext";
-import { Bot, CheckCircle2, Shield, Sparkles, ExternalLink, Layers } from "lucide-react";
-import { cn } from "@/lib/utils";
-import type { AgentRole } from "../types";
-
-function timeAgo(ts: number) {
-  const diff = Date.now() / 1000 - ts;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
-
-const agentConfig: Record<AgentRole, { label: string; desc: string; icon: typeof Bot; color: string }> = {
-  eligibility: {
-    label: "Sentinel",
-    desc: "Checks repo, demo, and rule compliance. Binary pass/fail.",
-    icon: CheckCircle2,
-    color: "text-primary",
-  },
-  "track-fit": {
-    label: "TrackFit",
-    desc: "Reads track requirements and scores project alignment.",
-    icon: Shield,
-    color: "text-accent",
-  },
-  quality: {
-    label: "Oracle",
-    desc: "LLM trained on top hackathon winners. Scores 0–100 with reasoning.",
-    icon: Sparkles,
-    color: "text-[hsl(var(--state-submitted))]",
-  },
-  payout: {
-    label: "Settler",
-    desc: "Executes USDC payout via smart contract on winner confirmation.",
-    icon: Bot,
-    color: "text-[hsl(var(--state-verified))]",
-  },
-  clustering: {
-    label: "Converge",
-    desc: "Embedding similarity + LLM labels group submissions by project theme for judges.",
-    icon: Layers,
-    color: "text-violet-500",
-  },
-};
-
-const PIPELINE_AGENT_ROLES = ["eligibility", "track-fit", "quality", "clustering"] as const satisfies readonly AgentRole[];
-
-function agentBadgeIndex(role: AgentRole): string {
-  const order: Record<(typeof PIPELINE_AGENT_ROLES)[number], string> = {
-    eligibility: "1",
-    "track-fit": "2",
-    quality: "3",
-    clustering: "4",
-  };
-  return order[role as keyof typeof order] ?? "?";
-}
-
-function agentProgressClass(role: AgentRole): string {
-  if (role === "eligibility") return "bg-primary";
-  if (role === "track-fit") return "bg-accent";
-  if (role === "quality") return "bg-[hsl(var(--state-submitted))]";
-  if (role === "clustering") return "bg-violet-500";
-  return "bg-muted-foreground";
-}
+import { useEffect, useMemo } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, ExternalLink, Loader2, ShieldCheck } from "lucide-react";
+import { toast } from "sonner";
+import { approveAward, fetchEvents, fetchHackathon, fetchHackathons, fetchJobs, redeemClaim } from "@/hackathon/api";
+import { signAwardApproval } from "@/hackathon/evm";
+import { formatDateTime, formatTokenAmount, relativeTime, shorten } from "@/hackathon/format";
+import { useAuth } from "@/auth/useAuth";
+import { Button } from "@/components/ui/button";
+import { hashscanEvmTxUrl, hashscanTransactionMessageUrl } from "@/contracts/config";
 
 export default function AgentPipeline() {
-  const { hackathons, loading } = useHackathonList();
-  const hackathon = hackathons[0];
-  const totalChecked = hackathon?.submissions.filter((s) => s.eligibility).length ?? 0;
-  const totalScored = hackathon?.submissions.filter((s) => s.qualityScore).length ?? 0;
+  const [params, setParams] = useSearchParams();
+  const queryClient = useQueryClient();
+  const { authenticated, openAuthDialog, user } = useAuth();
 
-  if (loading && !hackathon) {
-    return (
-      <div className="max-w-5xl mx-auto py-16 text-center text-sm text-muted-foreground">Loading…</div>
-    );
-  }
+  const hackathons = useQuery({
+    queryKey: ["hackathons"],
+    queryFn: fetchHackathons,
+  });
 
-  if (!hackathon) {
-    return (
-      <div className="max-w-5xl mx-auto py-12 text-sm text-muted-foreground">
-        No hackathon events loaded. Create one or enable mock data.
-      </div>
-    );
-  }
+  const selectedHackathonId = useMemo(() => {
+    const fromQuery = params.get("h");
+    if (fromQuery) return fromQuery;
+    return hackathons.data?.[0]?.id ?? "";
+  }, [hackathons.data, params]);
+
+  useEffect(() => {
+    if (!params.get("h") && hackathons.data?.[0]?.id) {
+      setParams({ h: hackathons.data[0].id });
+    }
+  }, [hackathons.data, params, setParams]);
+
+  const detail = useQuery({
+    queryKey: ["hackathon", selectedHackathonId],
+    queryFn: () => fetchHackathon(selectedHackathonId),
+    enabled: Boolean(selectedHackathonId),
+    refetchInterval: 8000,
+  });
+
+  const jobs = useQuery({
+    queryKey: ["jobs"],
+    queryFn: fetchJobs,
+    refetchInterval: 5000,
+  });
+
+  const events = useQuery({
+    queryKey: ["events", selectedHackathonId],
+    queryFn: () => fetchEvents({ hackathonId: selectedHackathonId }),
+    enabled: Boolean(selectedHackathonId),
+    refetchInterval: 5000,
+  });
+
+  const awardsById = useMemo(() => {
+    const entries = detail.data?.submissions
+      .map((submission) => submission.awardProposal)
+      .filter(Boolean)
+      .map((award) => [award!.id, award!] as const);
+    return new Map(entries ?? []);
+  }, [detail.data?.submissions]);
+
+  const approveMutation = useMutation({
+    mutationFn: async (awardId: string) => {
+      if (!detail.data) throw new Error("Hackathon not loaded");
+      const approvalRequest = detail.data.approvals.find((entry) => entry.awardId === awardId);
+      const award = awardsById.get(awardId);
+      if (!approvalRequest || !award) throw new Error("Approval request or award missing");
+      const payload = await signAwardApproval(detail.data, award, approvalRequest);
+      return approveAward(awardId, payload);
+    },
+    onSuccess: async () => {
+      toast.success("Award approved and relayed.");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["hackathon", selectedHackathonId] }),
+        queryClient.invalidateQueries({ queryKey: ["events", selectedHackathonId] }),
+        queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+      ]);
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Approval failed");
+    },
+  });
+
+  const redeemMutation = useMutation({
+    mutationFn: async (claimId: string) => redeemClaim(claimId),
+    onSuccess: async () => {
+      toast.success("Claim redeemed.");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["hackathon", selectedHackathonId] }),
+        queryClient.invalidateQueries({ queryKey: ["events", selectedHackathonId] }),
+      ]);
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Claim redemption failed");
+    },
+  });
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-xl font-black text-foreground">Agent Pipeline</h1>
-        <p className="text-xs text-muted-foreground mt-1">
-          Four autonomous agents verify, score, and group submissions. Humans make the final call.
-        </p>
+    <div className="mx-auto max-w-6xl space-y-6">
+      <div className="flex items-center justify-between gap-3">
+        <Link
+          to="/"
+          className="inline-flex items-center gap-1.5 text-[11px] font-mono uppercase tracking-widest text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Dashboard
+        </Link>
+
+        <select
+          value={selectedHackathonId}
+          onChange={(event) => setParams({ h: event.target.value })}
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+        >
+          {(hackathons.data ?? []).map((hackathon) => (
+            <option key={hackathon.id} value={hackathon.id}>
+              {hackathon.name}
+            </option>
+          ))}
+        </select>
       </div>
 
-      {/* Agent cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {PIPELINE_AGENT_ROLES.map((role) => {
-          const cfg = agentConfig[role];
-          const Icon = cfg.icon;
-          const activity = MOCK_AGENT_ACTIVITY.filter((a) => a.agentRole === role);
-          const denom =
-            role === "clustering" && hackathon.similarityClusters?.length
-              ? hackathon.submissions.length
-              : Math.max(hackathon.submissions.length, 1);
-          const numer =
-            role === "clustering" && hackathon.similarityClusters?.length
-              ? hackathon.submissions.length
-              : activity.length;
-          return (
-            <div key={role} className="border border-border bg-card p-5 space-y-4">
-              <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <Icon className={cn("h-4 w-4", cfg.color)} />
-                    <p className="text-sm font-bold text-foreground">{cfg.label}</p>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground leading-relaxed">{cfg.desc}</p>
-                </div>
-                <span className="text-[9px] font-mono px-1.5 py-0.5 bg-secondary text-secondary-foreground">
-                  Agent {agentBadgeIndex(role)}
-                </span>
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-[10px]">
-                  <span className="text-muted-foreground">{role === "clustering" ? "Runs" : "Processed"}</span>
-                  <span className="font-mono text-foreground">
-                    {role === "clustering" && hackathon.similarityClusters?.length
-                      ? `${hackathon.similarityClusters.length} groups`
-                      : `${activity.length} submissions`}
-                  </span>
-                </div>
-                <div className="h-1 bg-secondary rounded-full overflow-hidden">
-                  <div
-                    className={cn("h-full rounded-full", agentProgressClass(role))}
-                    style={{ width: `${(numer / denom) * 100}%` }}
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <p className="text-[9px] font-mono text-muted-foreground uppercase">Recent activity</p>
-                {activity.slice(0, 3).map((a) => (
-                  <div key={a.id} className="flex items-center gap-2 text-[10px]">
-                    <span className="text-muted-foreground">{timeAgo(a.timestamp)}</span>
-                    <span className="text-secondary-foreground truncate flex-1">{a.action}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Pipeline visualization */}
-      <div className="space-y-3">
-        <h2 className="text-sm font-bold text-foreground">Verification Flow</h2>
-        <div className="border border-border bg-card p-5">
-          <div className="flex items-center justify-between">
-            {[
-              { label: "Submitted", count: hackathon.submissions.length, color: "bg-muted-foreground" },
-              { label: "Eligibility Check", count: totalChecked, color: "bg-primary" },
-              { label: "Track Fit Scored", count: hackathon.submissions.filter((s) => s.trackFit).length, color: "bg-accent" },
-              { label: "Quality Scored", count: totalScored, color: "bg-[hsl(var(--state-submitted))]" },
-              { label: "Ready for Judges", count: totalScored, color: "bg-primary" },
-            ].map((step, i, arr) => (
-              <div key={step.label} className="flex items-center gap-3">
-                <div className="text-center space-y-1">
-                  <div className={cn("h-8 w-8 rounded-full flex items-center justify-center mx-auto", step.color)}>
-                    <span className="text-xs font-black text-background">{step.count}</span>
-                  </div>
-                  <p className="text-[9px] text-muted-foreground max-w-[80px]">{step.label}</p>
-                </div>
-                {i < arr.length - 1 && (
-                  <div className="h-px w-8 bg-border" />
-                )}
-              </div>
-            ))}
+      {!authenticated ? (
+        <div className="border border-border bg-card p-6 text-sm text-muted-foreground">
+          Sign in with the organizer or judge wallet to run live approval and redemption actions.
+          <div className="mt-3">
+            <Button onClick={openAuthDialog}>Sign in</Button>
           </div>
         </div>
-      </div>
+      ) : null}
 
-      {/* Audit trail */}
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-bold text-foreground">Hedera Audit Trail</h2>
-          <span className="text-[9px] font-mono px-1.5 py-0.5 bg-secondary text-secondary-foreground">HCS</span>
+      {detail.isLoading ? (
+        <div className="flex items-center gap-2 border border-border bg-card p-6 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading operations
         </div>
-        <div className="border border-border bg-card divide-y divide-border">
-          {MOCK_AGENT_ACTIVITY.sort((a, b) => b.timestamp - a.timestamp).map((a) => {
-            const cfg = agentConfig[a.agentRole];
-            const Icon = cfg.icon;
-            return (
-              <div key={a.id} className="px-4 py-3 flex items-center gap-3">
-                <Icon className={cn("h-3.5 w-3.5 shrink-0", cfg.color)} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-mono text-foreground">{a.agentName}</span>
-                    <span className="text-[10px] text-secondary-foreground truncate">{a.action}</span>
-                  </div>
+      ) : detail.data ? (
+        <>
+          <section className="border border-border bg-card p-6">
+            <div className="flex items-center gap-2 text-accent">
+              <ShieldCheck className="h-4 w-4" />
+              <span className="text-[10px] font-mono uppercase tracking-[0.3em]">Operations</span>
+            </div>
+            <h1 className="mt-3 text-3xl font-black tracking-tight text-foreground">{detail.data.name}</h1>
+            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+              Approvals are real EIP-712 signatures. If the connected MetaMask account is Ledger-backed, this same flow becomes the Ledger trust layer required by the track.
+            </p>
+          </section>
+
+          <section className="grid gap-6 lg:grid-cols-[1.05fr,0.95fr]">
+            <div className="space-y-6">
+              <div className="border border-border bg-card p-6">
+                <h2 className="text-lg font-black text-foreground">Approval queue</h2>
+                <div className="mt-4 space-y-4">
+                  {detail.data.approvals.map((approval) => {
+                    const award = awardsById.get(approval.awardId);
+                    const canApprove =
+                      authenticated &&
+                      user &&
+                      user.accountId === approval.signerAccountId &&
+                      user.evmAddress === approval.signerEvmAddress &&
+                      approval.status === "pending";
+                    return (
+                      <div key={approval.id} className="border border-border bg-background/40 p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <div className="font-mono text-sm text-foreground">{approval.actionType}</div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              signer {approval.signerAccountId} · expires {formatDateTime(approval.expiresAt)}
+                            </div>
+                          </div>
+                          <div className="font-mono text-sm text-foreground">{approval.status}</div>
+                        </div>
+
+                        {award ? (
+                          <div className="mt-4 grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-2">
+                            <div>
+                              Award
+                              <div className="font-mono text-foreground">{award.id}</div>
+                            </div>
+                            <div>
+                              Amount
+                              <div className="font-mono text-foreground">{formatTokenAmount(award.amount)}</div>
+                            </div>
+                            <div>
+                              Recipient
+                              <div className="font-mono text-foreground">{shorten(award.winnerEvmAddress, 10, 8)}</div>
+                            </div>
+                            <div>
+                              Settlement
+                              <div className="font-mono text-foreground">{award.settlementMode}</div>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        <pre className="mt-4 overflow-auto rounded-md bg-card p-3 text-[11px] text-muted-foreground">
+                          {JSON.stringify(approval.clearSigningManifest, null, 2)}
+                        </pre>
+
+                        {canApprove ? (
+                          <div className="mt-4">
+                            <Button onClick={() => approveMutation.mutate(approval.awardId)} disabled={approveMutation.isPending}>
+                              {approveMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                              Sign and approve
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                  {!detail.data.approvals.length ? (
+                    <p className="text-sm text-muted-foreground">No approval requests are pending for this hackathon.</p>
+                  ) : null}
                 </div>
-                <span className="text-[9px] text-muted-foreground shrink-0">{timeAgo(a.timestamp)}</span>
-                <a
-                  href="#"
-                  className="flex items-center gap-1 text-[9px] font-mono text-muted-foreground hover:text-foreground shrink-0"
-                  title={a.hederaTxId}
-                >
-                  HCS <ExternalLink className="h-2.5 w-2.5" />
-                </a>
               </div>
-            );
-          })}
+
+              <div className="border border-border bg-card p-6">
+                <h2 className="text-lg font-black text-foreground">Claims</h2>
+                <div className="mt-4 space-y-4">
+                  {detail.data.claims.map((claim) => {
+                    const canRedeem =
+                      authenticated &&
+                      user &&
+                      user.accountId === claim.claimantAccountId &&
+                      user.evmAddress === claim.claimantEvmAddress &&
+                      claim.status === "minted";
+                    return (
+                      <div key={claim.id} className="border border-border bg-background/40 p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <div className="font-mono text-sm text-foreground">{claim.id}</div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              claimant {claim.claimantAccountId} · serial {claim.serialNumber ?? "—"}
+                            </div>
+                          </div>
+                          <div className="font-mono text-sm text-foreground">{claim.status}</div>
+                        </div>
+                        <div className="mt-4 grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-2">
+                          <div>
+                            Token
+                            <div className="font-mono text-foreground">{shorten(claim.tokenAddress, 10, 8)}</div>
+                          </div>
+                          <div>
+                            Metadata
+                            <div className="font-mono text-foreground">{claim.metadataURI ?? "—"}</div>
+                          </div>
+                        </div>
+                        {canRedeem ? (
+                          <div className="mt-4">
+                            <Button variant="outline" onClick={() => redeemMutation.mutate(claim.id)} disabled={redeemMutation.isPending}>
+                              {redeemMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                              Redeem claim
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                  {!detail.data.claims.length ? (
+                    <p className="text-sm text-muted-foreground">No claim tokens minted yet.</p>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              <div className="border border-border bg-card p-6">
+                <h2 className="text-lg font-black text-foreground">Jobs</h2>
+                <div className="mt-4 space-y-3">
+                  {(jobs.data ?? [])
+                    .filter((job) => !selectedHackathonId || job.payload.submissionId || job.payload.hackathonId)
+                    .slice(0, 12)
+                    .map((job) => (
+                      <div key={job.id} className="border border-border bg-background/40 p-3 text-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-mono text-foreground">{job.type}</div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">{relativeTime(job.createdAt)}</div>
+                          </div>
+                          <div className="font-mono text-foreground">{job.status}</div>
+                        </div>
+                        {job.lastError ? <p className="mt-2 text-[11px] text-destructive">{job.lastError}</p> : null}
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              <div className="border border-border bg-card p-6">
+                <h2 className="text-lg font-black text-foreground">Event stream</h2>
+                <div className="mt-4 space-y-3">
+                  {(events.data ?? []).slice(0, 16).map((event) => {
+                    const txHref = event.txHash ? hashscanEvmTxUrl(event.txHash) : null;
+                    const hcsHref = event.hcsTxId ? hashscanTransactionMessageUrl(event.hcsTxId) : null;
+                    const primaryHref = hcsHref ?? txHref;
+
+                    const content = (
+                      <>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-mono text-foreground">{event.type}</div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              {event.source} · {relativeTime(event.createdAt)}
+                            </div>
+                          </div>
+                          {primaryHref ? (
+                            <div className="flex flex-col items-end gap-1 text-[11px] text-accent">
+                              <span className="inline-flex items-center gap-1">
+                                {hcsHref ? "HCS message" : "Tx"}
+                                <ExternalLink className="h-3 w-3" />
+                              </span>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 text-[11px] text-muted-foreground">{formatDateTime(event.createdAt)}</div>
+                        {event.hcsTopicId && event.hcsSequenceNumber ? (
+                          <div className="mt-1 font-mono text-[11px] text-muted-foreground">
+                            topic {event.hcsTopicId} · seq {event.hcsSequenceNumber}
+                          </div>
+                        ) : null}
+                      </>
+                    );
+
+                    return primaryHref ? (
+                      <a
+                        key={event.id}
+                        href={primaryHref}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block border border-border bg-background/40 p-3 text-sm transition-colors hover:border-accent/60 hover:bg-background/70"
+                      >
+                        {content}
+                      </a>
+                    ) : (
+                      <div key={event.id} className="border border-border bg-background/40 p-3 text-sm">
+                        {content}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </section>
+        </>
+      ) : (
+        <div className="border border-border bg-card p-6 text-sm text-destructive">
+          {detail.error instanceof Error ? detail.error.message : "Could not load operations"}
         </div>
-      </div>
+      )}
     </div>
   );
 }

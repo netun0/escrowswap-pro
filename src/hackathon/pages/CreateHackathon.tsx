@@ -1,472 +1,385 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { HEDERA_API_URL } from "@/contracts/env";
-import { isHackathonMockup } from "@/hackathon/hackathonEnv";
-import { buildHackathonPayload, type TrackDraft } from "@/hackathon/buildHackathonPayload";
-import { useHackathonList } from "@/hackathon/HackathonListContext";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Plus, ShieldCheck, Trash2 } from "lucide-react";
+import type { CreateHackathonRequest, Track } from "@shared/treasury";
+import { createHackathon } from "@/hackathon/api";
+import { formatDateInput, localInputToIso } from "@/hackathon/format";
+import { useAuth } from "@/auth/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import {
-  Trophy,
-  Plus,
-  Trash2,
-  Lock,
-  Shield,
-  Bot,
-  CheckCircle2,
-  FileText,
-  Zap,
-} from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 
-interface EligibilityRule {
-  id: string;
-  label: string;
-  enabled: boolean;
-  description: string;
+type TrackDraft = Track & {
+  requirementsText: string;
+};
+
+function defaultDate(offsetDays: number): string {
+  const value = new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000);
+  return formatDateInput(value.toISOString());
 }
 
-const DEFAULT_ELIGIBILITY_RULES: EligibilityRule[] = [
-  { id: "github", label: "GitHub repo must be public & live", enabled: true, description: "Agent verifies the repo URL returns 200 and is not empty." },
-  { id: "demo", label: "Demo video / live link required", enabled: true, description: "Agent checks for a valid video URL or deployed app link." },
-  { id: "readme", label: "README with setup instructions", enabled: false, description: "Agent scans for a README.md with install/run steps." },
-  { id: "license", label: "Open source license present", enabled: false, description: "Agent checks for an OSI-approved LICENSE file." },
-  { id: "deploy", label: "Smart contract deployed on testnet", enabled: false, description: "Agent verifies contract address on the target chain." },
-  { id: "tests", label: "Automated tests included", enabled: false, description: "Agent checks for a test directory with passing CI." },
-];
-
-const QUALITY_CRITERIA = [
-  { id: "innovation", label: "Innovation & Novelty", weight: 30 },
-  { id: "execution", label: "Technical Execution", weight: 25 },
-  { id: "design", label: "Design & UX", weight: 20 },
-  { id: "impact", label: "Real-world Impact", weight: 15 },
-  { id: "presentation", label: "Presentation Quality", weight: 10 },
-];
+function makeTrack(index: number): TrackDraft {
+  return {
+    id: `track-${index + 1}`,
+    name: "",
+    description: "",
+    sponsorName: "",
+    prizeAmount: "1000",
+    requirements: ["Public GitHub repository", "Working demo"],
+    requirementsText: "Public GitHub repository\nWorking demo",
+    evaluationPolicy: {
+      minQualityScore: 75,
+      requiresPublicRepo: true,
+      requiresReadme: true,
+      requiresDemo: true,
+      requiresHashscanVerification: false,
+      requiresContracts: false,
+    },
+  };
+}
 
 export default function CreateHackathon() {
   const navigate = useNavigate();
-  const { refetch } = useHackathonList();
-  const [submitting, setSubmitting] = useState(false);
+  const queryClient = useQueryClient();
+  const { authenticated, openAuthDialog, user } = useAuth();
 
-  // Basic info
   const [name, setName] = useState("");
   const [tagline, setTagline] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  const [judgeAccountId, setJudgeAccountId] = useState(user?.accountId ?? "");
+  const [judgeEvmAddress, setJudgeEvmAddress] = useState(user?.evmAddress ?? "");
+  const [payoutTokenId, setPayoutTokenId] = useState("");
+  const [payoutTokenEvmAddress, setPayoutTokenEvmAddress] = useState("");
+  const [autonomousThreshold, setAutonomousThreshold] = useState("1000");
+  const [approvalExpirySeconds, setApprovalExpirySeconds] = useState("604800");
+  const [startsAt, setStartsAt] = useState(defaultDate(1));
+  const [submissionDeadline, setSubmissionDeadline] = useState(defaultDate(7));
+  const [endsAt, setEndsAt] = useState(defaultDate(10));
+  const [judgingEndsAt, setJudgingEndsAt] = useState(defaultDate(12));
+  const [tracks, setTracks] = useState<TrackDraft[]>([makeTrack(0)]);
 
-  // Tracks
-  const [tracks, setTracks] = useState<TrackDraft[]>([
-    { name: "", description: "", prize: "", requirements: [""] },
-  ]);
-
-  // Eligibility rules
-  const [eligibilityRules, setEligibilityRules] = useState<EligibilityRule[]>(
-    DEFAULT_ELIGIBILITY_RULES
+  const totalBudget = useMemo(
+    () => tracks.reduce((sum, track) => sum + (Number(track.prizeAmount) || 0), 0),
+    [tracks],
   );
 
-  // Quality weights
-  const [qualityWeights, setQualityWeights] = useState(
-    QUALITY_CRITERIA.map((c) => ({ ...c }))
-  );
-
-  // Safety
-  const [autoEscrow, setAutoEscrow] = useState(true);
-  const [maxSubmissionsPerTeam, setMaxSubmissionsPerTeam] = useState("1");
-  const [autoPayoutOnConfirm, setAutoPayoutOnConfirm] = useState(true);
-
-  const totalPrize = tracks.reduce((s, t) => s + (Number(t.prize) || 0), 0);
-  const totalWeight = qualityWeights.reduce((s, w) => s + w.weight, 0);
-
-  function addTrack() {
-    setTracks([...tracks, { name: "", description: "", prize: "", requirements: [""] }]);
-  }
-
-  function removeTrack(i: number) {
-    setTracks(tracks.filter((_, idx) => idx !== i));
-  }
-
-  function updateTrack(i: number, field: keyof TrackDraft, value: string) {
-    const copy = [...tracks];
-    (copy[i] as any)[field] = value;
-    setTracks(copy);
-  }
-
-  function addRequirement(trackIdx: number) {
-    const copy = [...tracks];
-    copy[trackIdx].requirements.push("");
-    setTracks(copy);
-  }
-
-  function updateRequirement(trackIdx: number, reqIdx: number, value: string) {
-    const copy = [...tracks];
-    copy[trackIdx].requirements[reqIdx] = value;
-    setTracks(copy);
-  }
-
-  function removeRequirement(trackIdx: number, reqIdx: number) {
-    const copy = [...tracks];
-    copy[trackIdx].requirements = copy[trackIdx].requirements.filter((_, i) => i !== reqIdx);
-    setTracks(copy);
-  }
-
-  function toggleRule(id: string) {
-    setEligibilityRules(
-      eligibilityRules.map((r) => (r.id === id ? { ...r, enabled: !r.enabled } : r))
-    );
-  }
-
-  function updateWeight(id: string, weight: number) {
-    setQualityWeights(
-      qualityWeights.map((w) => (w.id === id ? { ...w, weight: Math.max(0, Math.min(100, weight)) } : w))
-    );
-  }
-
-  async function handleSubmit() {
-    if (!name.trim()) return toast.error("Hackathon name is required");
-    if (tracks.some((t) => !t.name.trim() || !t.prize)) return toast.error("All tracks need a name and prize");
-    if (totalWeight !== 100) return toast.error(`Quality weights must total 100% (currently ${totalWeight}%)`);
-
-    if (isHackathonMockup()) {
-      toast.success("Hackathon recorded in mock mode. Set VITE_HACKATHON_MOCKUP=false and VITE_HEDERA_API_URL to persist on the server.");
-      navigate("/hackathon");
-      return;
-    }
-
-    const base = HEDERA_API_URL.replace(/\/$/, "");
-    if (!base) {
-      toast.error("Set VITE_HEDERA_API_URL to save events to hackathons.json on the server.");
-      return;
-    }
-
-    const payload = buildHackathonPayload({
-      name,
-      tagline,
-      startDate,
-      endDate,
-      tracks,
-      autoEscrow,
-    });
-
-    setSubmitting(true);
-    try {
-      const r = await fetch(`${base}/hackathons`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!r.ok) {
-        const t = await r.text();
-        throw new Error(t || r.statusText);
+  const createMutation = useMutation({
+    mutationFn: async () => {
+      if (!authenticated || !user) {
+        throw new Error("Sign in as the organizer before creating a hackathon.");
       }
-      await refetch();
-      toast.success("Event saved to the server (hackathons.json).");
-      navigate("/hackathon");
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setSubmitting(false);
-    }
+
+      const payload: CreateHackathonRequest = {
+        name,
+        tagline,
+        organizerAccountId: user.accountId,
+        organizerEvmAddress: user.evmAddress,
+        judgeAccountId,
+        judgeEvmAddress,
+        payoutTokenId,
+        payoutTokenEvmAddress,
+        autonomousThreshold,
+        approvalExpirySeconds: Number(approvalExpirySeconds),
+        startsAt: localInputToIso(startsAt),
+        endsAt: localInputToIso(endsAt),
+        submissionDeadline: localInputToIso(submissionDeadline),
+        judgingEndsAt: localInputToIso(judgingEndsAt),
+        tracks: tracks.map((track) => ({
+          ...track,
+          requirements: track.requirementsText
+            .split("\n")
+            .map((entry) => entry.trim())
+            .filter(Boolean),
+        })),
+      };
+
+      return createHackathon(payload);
+    },
+    onSuccess: async (hackathon) => {
+      toast.success("Hackathon created. Next step: fund the treasury on Hedera.");
+      await queryClient.invalidateQueries({ queryKey: ["hackathons"] });
+      navigate(`/hackathon/live?id=${encodeURIComponent(hackathon.id)}`);
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Could not create hackathon");
+    },
+  });
+
+  function updateTrack(index: number, updater: (track: TrackDraft) => TrackDraft) {
+    setTracks((current) => current.map((track, trackIndex) => (trackIndex === index ? updater(track) : track)));
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 pb-12">
-      {/* Header */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <Zap className="h-4 w-4 text-accent" />
-          <span className="text-[10px] font-mono text-accent uppercase tracking-widest">
-            Organizer Setup
-          </span>
+    <div className="mx-auto max-w-5xl space-y-6">
+      <div className="border border-border bg-card p-6">
+        <div className="flex items-center gap-2 text-accent">
+          <ShieldCheck className="h-4 w-4" />
+          <span className="text-[10px] font-mono uppercase tracking-[0.3em]">Organizer Setup</span>
         </div>
-        <h1 className="text-2xl font-black text-foreground tracking-tight">
-          Create Hackathon
-        </h1>
-        <p className="text-xs text-muted-foreground">
-          Define your event, tracks, judging rules, and agent validation criteria. Everything you set here drives the autonomous pipeline.
+        <h1 className="mt-3 text-3xl font-black tracking-tight text-foreground">Create a hackathon treasury</h1>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+          This writes the live event definition to Postgres and seeds the worker pipeline. The actual funds move only after you approve token spend and bootstrap the treasury on the detail page.
         </p>
       </div>
 
-      {/* ── Section 1: Event Details ── */}
-      <section className="border border-border bg-card p-6 space-y-5">
-        <div className="flex items-center gap-2 mb-1">
-          <FileText className="h-4 w-4 text-primary" />
-          <h2 className="text-sm font-bold text-foreground">Event Details</h2>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">Hackathon Name</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="ChainForge Summit 2025"
-              className="bg-background text-sm"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">Tagline</Label>
-            <Input
-              value={tagline}
-              onChange={(e) => setTagline(e.target.value)}
-              placeholder="The first trustless hackathon"
-              className="bg-background text-sm"
-            />
+      {!authenticated || !user ? (
+        <div className="border border-border bg-card p-6 text-sm text-muted-foreground">
+          Sign in with the organizer MetaMask account first.
+          <div className="mt-3">
+            <Button onClick={openAuthDialog}>Sign in</Button>
           </div>
         </div>
+      ) : null}
 
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">Start Date</Label>
-            <Input
-              type="datetime-local"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="bg-background text-sm"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">End Date</Label>
-            <Input
-              type="datetime-local"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="bg-background text-sm"
-            />
-          </div>
-        </div>
-      </section>
-
-      {/* ── Section 2: Tracks & Prizes ── */}
-      <section className="border border-border bg-card p-6 space-y-5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Trophy className="h-4 w-4 text-accent" />
-            <h2 className="text-sm font-bold text-foreground">Tracks & Prizes</h2>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-mono text-muted-foreground">
-              Total: <span className="text-accent font-bold">${totalPrize.toLocaleString()}</span> USDC
-            </span>
-            <Button variant="outline" size="sm" className="text-[10px] h-7" onClick={addTrack}>
-              <Plus className="h-3 w-3 mr-1" /> Add Track
-            </Button>
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          {tracks.map((track, i) => (
-            <div key={i} className="border border-border bg-background p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-mono text-accent">Track {String(i + 1).padStart(2, "0")}</span>
-                {tracks.length > 1 && (
-                  <button onClick={() => removeTrack(i)} className="text-destructive hover:text-destructive/80">
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                )}
+      <div className="grid gap-6 lg:grid-cols-[1.05fr,0.95fr]">
+        <section className="space-y-6">
+          <div className="border border-border bg-card p-6">
+            <h2 className="text-lg font-black text-foreground">Identity and treasury</h2>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Organizer account</Label>
+                <Input value={user?.accountId ?? ""} disabled className="font-mono" />
               </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="space-y-1.5">
-                  <Label className="text-[10px] text-muted-foreground">Track Name</Label>
-                  <Input
-                    value={track.name}
-                    onChange={(e) => updateTrack(i, "name", e.target.value)}
-                    placeholder="DeFi Innovation"
-                    className="bg-card text-xs h-8"
-                  />
-                </div>
-                <div className="col-span-1 space-y-1.5">
-                  <Label className="text-[10px] text-muted-foreground">Prize (USDC)</Label>
-                  <Input
-                    type="number"
-                    value={track.prize}
-                    onChange={(e) => updateTrack(i, "prize", e.target.value)}
-                    placeholder="50,000"
-                    className="bg-card text-xs h-8 font-mono"
-                  />
-                </div>
+              <div className="space-y-2">
+                <Label>Organizer EVM</Label>
+                <Input value={user?.evmAddress ?? ""} disabled className="font-mono" />
               </div>
-              <div className="space-y-1.5">
-                <Label className="text-[10px] text-muted-foreground">Description</Label>
-                <Textarea
-                  value={track.description}
-                  onChange={(e) => updateTrack(i, "description", e.target.value)}
-                  placeholder="What should participants build in this track?"
-                  className="bg-card text-xs min-h-[60px]"
+              <div className="space-y-2">
+                <Label>Judge account</Label>
+                <Input value={judgeAccountId} onChange={(event) => setJudgeAccountId(event.target.value)} className="font-mono" />
+              </div>
+              <div className="space-y-2">
+                <Label>Judge EVM</Label>
+                <Input value={judgeEvmAddress} onChange={(event) => setJudgeEvmAddress(event.target.value)} className="font-mono" />
+              </div>
+              <div className="space-y-2">
+                <Label>Payout token id</Label>
+                <Input
+                  value={payoutTokenId}
+                  onChange={(event) => setPayoutTokenId(event.target.value)}
+                  placeholder="0.0.x"
+                  className="font-mono"
                 />
               </div>
               <div className="space-y-2">
-                <Label className="text-[10px] text-muted-foreground">Track Requirements (used by agents to verify submissions)</Label>
-                {track.requirements.map((req, ri) => (
-                  <div key={ri} className="flex items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground font-mono w-4">{ri + 1}.</span>
-                    <Input
-                      value={req}
-                      onChange={(e) => updateRequirement(i, ri, e.target.value)}
-                      placeholder="e.g. Smart contract deployed on testnet"
-                      className="bg-card text-xs h-7 flex-1"
-                    />
-                    {track.requirements.length > 1 && (
-                      <button onClick={() => removeRequirement(i, ri)} className="text-destructive/60 hover:text-destructive">
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-                <button
-                  onClick={() => addRequirement(i)}
-                  className="text-[10px] text-primary hover:text-primary/80 font-medium flex items-center gap-1"
-                >
-                  <Plus className="h-3 w-3" /> Add requirement
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ── Section 3: Agent Eligibility Rules ── */}
-      <section className="border border-border bg-card p-6 space-y-5">
-        <div className="flex items-center gap-2">
-          <Bot className="h-4 w-4 text-primary" />
-          <h2 className="text-sm font-bold text-foreground">Agent Eligibility Rules</h2>
-        </div>
-        <p className="text-[10px] text-muted-foreground -mt-3">
-          These binary checks run automatically on every submission. Toggle which ones your hackathon requires.
-        </p>
-
-        <div className="space-y-2">
-          {eligibilityRules.map((rule) => (
-            <div
-              key={rule.id}
-              className="flex items-start gap-3 border border-border bg-background p-3 hover:border-primary/30 transition-colors"
-            >
-              <Switch
-                checked={rule.enabled}
-                onCheckedChange={() => toggleRule(rule.id)}
-                className="mt-0.5"
-              />
-              <div className="flex-1 space-y-0.5">
-                <p className="text-xs font-medium text-foreground">{rule.label}</p>
-                <p className="text-[10px] text-muted-foreground">{rule.description}</p>
-              </div>
-              {rule.enabled && (
-                <CheckCircle2 className="h-3.5 w-3.5 text-primary mt-0.5" />
-              )}
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ── Section 4: Quality Scoring Weights ── */}
-      <section className="border border-border bg-card p-6 space-y-5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Shield className="h-4 w-4 text-accent" />
-            <h2 className="text-sm font-bold text-foreground">Quality Scoring Weights</h2>
-          </div>
-          <span className={`text-xs font-mono ${totalWeight === 100 ? "text-primary" : "text-destructive"}`}>
-            {totalWeight}% / 100%
-          </span>
-        </div>
-        <p className="text-[10px] text-muted-foreground -mt-3">
-          Configure how the AI quality agent weighs each criterion. These weights shape the 0–100 score.
-        </p>
-
-        <div className="space-y-3">
-          {qualityWeights.map((crit) => (
-            <div key={crit.id} className="flex items-center gap-4">
-              <span className="text-xs text-foreground w-40">{crit.label}</span>
-              <div className="flex-1 h-2 bg-secondary rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-accent transition-all"
-                  style={{ width: `${crit.weight}%` }}
+                <Label>Payout token EVM address</Label>
+                <Input
+                  value={payoutTokenEvmAddress}
+                  onChange={(event) => setPayoutTokenEvmAddress(event.target.value)}
+                  placeholder="0x..."
+                  className="font-mono"
                 />
               </div>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => updateWeight(crit.id, crit.weight - 5)}
-                  className="text-[10px] text-muted-foreground hover:text-foreground px-1"
-                >
-                  −
-                </button>
-                <span className="text-xs font-mono text-foreground w-8 text-center">
-                  {crit.weight}%
-                </span>
-                <button
-                  onClick={() => updateWeight(crit.id, crit.weight + 5)}
-                  className="text-[10px] text-muted-foreground hover:text-foreground px-1"
-                >
-                  +
-                </button>
+              <div className="space-y-2">
+                <Label>Autonomous payout threshold</Label>
+                <Input
+                  value={autonomousThreshold}
+                  onChange={(event) => setAutonomousThreshold(event.target.value)}
+                  className="font-mono"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Approval expiry seconds</Label>
+                <Input
+                  value={approvalExpirySeconds}
+                  onChange={(event) => setApprovalExpirySeconds(event.target.value)}
+                  className="font-mono"
+                />
               </div>
             </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ── Section 5: Safety & Settlement ── */}
-      <section className="border border-border bg-card p-6 space-y-5">
-        <div className="flex items-center gap-2">
-          <Lock className="h-4 w-4 text-primary" />
-          <h2 className="text-sm font-bold text-foreground">Safety & Settlement</h2>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div className="flex items-start gap-3 border border-border bg-background p-3">
-            <Switch checked={autoEscrow} onCheckedChange={setAutoEscrow} className="mt-0.5" />
-            <div className="space-y-0.5">
-              <p className="text-xs font-medium text-foreground">Lock escrow on start</p>
-              <p className="text-[10px] text-muted-foreground">
-                Prize pool auto-locks in the Hedera operator escrow when the hackathon begins.
-              </p>
+            <div className="mt-4">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (!user) return;
+                  setJudgeAccountId(user.accountId);
+                  setJudgeEvmAddress(user.evmAddress);
+                }}
+              >
+                Use my wallet as judge
+              </Button>
             </div>
           </div>
-          <div className="flex items-start gap-3 border border-border bg-background p-3">
-            <Switch checked={autoPayoutOnConfirm} onCheckedChange={setAutoPayoutOnConfirm} className="mt-0.5" />
-            <div className="space-y-0.5">
-              <p className="text-xs font-medium text-foreground">Auto-payout on confirm</p>
-              <p className="text-[10px] text-muted-foreground">
-                USDC released instantly when a judge confirms the winner. No manual transfer.
-              </p>
+
+          <div className="border border-border bg-card p-6">
+            <h2 className="text-lg font-black text-foreground">Schedule and messaging</h2>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Name</Label>
+                <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="ETHGlobal Cannes Treasury Tracks" />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Tagline</Label>
+                <Textarea
+                  value={tagline}
+                  onChange={(event) => setTagline(event.target.value)}
+                  placeholder="Live treasury operations for Hedera, Ledger, and Naryo submissions."
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Starts at</Label>
+                <Input type="datetime-local" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Submission deadline</Label>
+                <Input type="datetime-local" value={submissionDeadline} onChange={(event) => setSubmissionDeadline(event.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Hackathon ends</Label>
+                <Input type="datetime-local" value={endsAt} onChange={(event) => setEndsAt(event.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Judging ends</Label>
+                <Input type="datetime-local" value={judgingEndsAt} onChange={(event) => setJudgingEndsAt(event.target.value)} />
+              </div>
             </div>
           </div>
-        </div>
+        </section>
 
-        <div className="space-y-1.5">
-          <Label className="text-[10px] text-muted-foreground">Max submissions per team</Label>
-          <Input
-            type="number"
-            value={maxSubmissionsPerTeam}
-            onChange={(e) => setMaxSubmissionsPerTeam(e.target.value)}
-            className="bg-background text-xs h-8 w-32 font-mono"
-            min={1}
-            max={5}
-          />
-        </div>
-      </section>
+        <section className="space-y-6">
+          <div className="border border-border bg-card p-6">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-black text-foreground">Tracks</h2>
+                <p className="text-sm text-muted-foreground">Each track maps directly to a funded treasury budget and an evaluation policy.</p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => setTracks((current) => [...current, makeTrack(current.length)])}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                Add track
+              </Button>
+            </div>
 
-      {/* Submit */}
-      <div className="flex items-center justify-between border border-border bg-card p-5">
-        <div className="space-y-0.5">
-          <p className="text-xs text-muted-foreground">
-            {tracks.length} track{tracks.length !== 1 && "s"} · ${totalPrize.toLocaleString()} USDC ·{" "}
-            {eligibilityRules.filter((r) => r.enabled).length} eligibility checks
-          </p>
-          <p className="text-[10px] text-muted-foreground">
-            Agents will start processing submissions automatically once the event goes live.
-          </p>
-        </div>
-        <Button
-          onClick={() => void handleSubmit()}
-          disabled={submitting}
-          className="bg-primary text-primary-foreground font-bold text-xs px-6"
-        >
-          <Lock className="h-3.5 w-3.5 mr-1.5" />
-          {submitting ? "Saving…" : "Create & Lock Escrow"}
-        </Button>
+            <div className="mt-5 space-y-4">
+              {tracks.map((track, index) => (
+                <div key={track.id} className="border border-border bg-background/40 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-sm font-bold text-foreground">Track {index + 1}</h3>
+                    {tracks.length > 1 ? (
+                      <Button variant="ghost" size="sm" onClick={() => setTracks((current) => current.filter((_, i) => i !== index))}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 space-y-4">
+                    <div className="space-y-2">
+                      <Label>Track id</Label>
+                      <Input
+                        value={track.id}
+                        onChange={(event) => updateTrack(index, (current) => ({ ...current, id: event.target.value }))}
+                        className="font-mono"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Name</Label>
+                      <Input
+                        value={track.name}
+                        onChange={(event) => updateTrack(index, (current) => ({ ...current, name: event.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Sponsor name</Label>
+                      <Input
+                        value={track.sponsorName}
+                        onChange={(event) => updateTrack(index, (current) => ({ ...current, sponsorName: event.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Description</Label>
+                      <Textarea
+                        value={track.description}
+                        onChange={(event) => updateTrack(index, (current) => ({ ...current, description: event.target.value }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Prize amount</Label>
+                      <Input
+                        value={track.prizeAmount}
+                        onChange={(event) => updateTrack(index, (current) => ({ ...current, prizeAmount: event.target.value }))}
+                        className="font-mono"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Requirements (one per line)</Label>
+                      <Textarea
+                        value={track.requirementsText}
+                        onChange={(event) => updateTrack(index, (current) => ({ ...current, requirementsText: event.target.value }))}
+                      />
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>Min quality score</Label>
+                        <Input
+                          value={String(track.evaluationPolicy.minQualityScore)}
+                          onChange={(event) =>
+                            updateTrack(index, (current) => ({
+                              ...current,
+                              evaluationPolicy: {
+                                ...current.evaluationPolicy,
+                                minQualityScore: Number(event.target.value || 0),
+                              },
+                            }))
+                          }
+                          className="font-mono"
+                        />
+                      </div>
+                      {[
+                        ["requiresPublicRepo", "Require public repo"],
+                        ["requiresReadme", "Require README"],
+                        ["requiresDemo", "Require demo"],
+                        ["requiresContracts", "Require deployed contracts"],
+                        ["requiresHashscanVerification", "Require HashScan verification"],
+                      ].map(([field, label]) => (
+                        <label key={field} className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(track.evaluationPolicy[field as keyof typeof track.evaluationPolicy])}
+                            onChange={(event) =>
+                              updateTrack(index, (current) => ({
+                                ...current,
+                                evaluationPolicy: {
+                                  ...current.evaluationPolicy,
+                                  [field]: event.target.checked,
+                                },
+                              }))
+                            }
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="border border-border bg-card p-6">
+            <p className="text-[10px] font-mono uppercase tracking-[0.3em] text-muted-foreground">Summary</p>
+            <div className="mt-4 space-y-2 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Tracks</span>
+                <span className="font-mono text-foreground">{tracks.length}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Total prize budget</span>
+                <span className="font-mono text-foreground">{totalBudget.toLocaleString()} USDC</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Judge signer</span>
+                <span className="font-mono text-foreground">{judgeAccountId || "unset"}</span>
+              </div>
+            </div>
+            <Button className="mt-5 w-full" onClick={() => createMutation.mutate()} disabled={createMutation.isPending || !authenticated}>
+              {createMutation.isPending ? "Creating..." : "Create hackathon"}
+            </Button>
+          </div>
+        </section>
       </div>
     </div>
   );
