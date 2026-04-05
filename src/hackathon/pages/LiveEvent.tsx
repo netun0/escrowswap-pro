@@ -1,224 +1,158 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useHackathonSubmissions } from "../HackathonSubmissionsContext";
-import { useHackathonList } from "../HackathonListContext";
-import { Trophy, Lock, Shield, Clock, Users, CheckCircle2, XCircle, ChevronRight } from "lucide-react";
-import { Link } from "react-router-dom";
-import { cn } from "@/lib/utils";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ExternalLink, ShieldCheck, Wallet } from "lucide-react";
+import { fundHackathon, getHackathon, listHackathons } from "@/hackathon/api";
+import { approveTreasurySpending, bootstrapHackathonTreasury } from "@/hackathon/ledger";
+import { useAuth } from "@/auth/useAuth";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
-function formatUSD(n: number) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
-}
+const TREASURY_ADDRESS = (import.meta.env.VITE_TREASURY_CONTRACT_ADDRESS as string | undefined)?.trim() ?? "";
 
-function timeRemaining(ts: number) {
-  const diff = ts - Date.now() / 1000;
-  if (diff <= 0) return "Ended";
-  const h = Math.floor(diff / 3600);
-  const m = Math.floor((diff % 3600) / 60);
-  if (h > 24) return `${Math.floor(h / 24)}d ${h % 24}h`;
-  return `${h}h ${m}m`;
+function money(value: string): string {
+  return Intl.NumberFormat("en-US").format(Number(value || 0));
 }
 
 export default function LiveEvent() {
-  const [params] = useSearchParams();
-  const eventId = params.get("id");
-  const { hackathons, loading, error } = useHackathonList();
-  const { getMergedSubmissions, version } = useHackathonSubmissions();
-  const base = useMemo(() => {
-    if (eventId) return hackathons.find((h) => h.id === eventId);
-    return hackathons[0];
-  }, [eventId, hackathons]);
+  const [searchParams] = useSearchParams();
+  const auth = useAuth();
+  const queryClient = useQueryClient();
+  const [step, setStep] = useState<"idle" | "approving" | "funding">("idle");
+  const hackathonId = searchParams.get("id") ?? "";
 
-  const hackathon = useMemo(() => {
-    if (!base) return undefined;
-    return {
-      ...base,
-      submissions: getMergedSubmissions(base.id, base.submissions),
-    };
-  }, [base, getMergedSubmissions, version]);
+  const listQuery = useQuery({
+    queryKey: ["hackathons"],
+    queryFn: listHackathons,
+  });
 
-  if (loading && hackathons.length === 0) {
-    return (
-      <div className="max-w-5xl mx-auto py-16 text-center text-sm text-muted-foreground">Loading event…</div>
-    );
+  const resolvedHackathonId = useMemo(() => hackathonId || listQuery.data?.[0]?.id || "", [hackathonId, listQuery.data]);
+  const hackathonQuery = useQuery({
+    queryKey: ["hackathon", resolvedHackathonId],
+    queryFn: () => getHackathon(resolvedHackathonId),
+    enabled: Boolean(resolvedHackathonId),
+  });
+
+  const syncFunding = useMutation({
+    mutationFn: (txHash: string) => fundHackathon(resolvedHackathonId, txHash),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["hackathons"] });
+      await queryClient.invalidateQueries({ queryKey: ["hackathon", resolvedHackathonId] });
+    },
+  });
+
+  const hackathon = hackathonQuery.data;
+  const totalPrize = hackathon?.tracks.reduce((sum, track) => sum + BigInt(track.prizeAmount), 0n) ?? 0n;
+  const canFund =
+    Boolean(hackathon && TREASURY_ADDRESS) &&
+    auth.authenticated &&
+    auth.user?.accountId === hackathon?.organizerAccountId &&
+    Boolean(hackathon && auth.user?.evmAddress && auth.user.evmAddress.toLowerCase() === hackathon.organizerEvmAddress.toLowerCase());
+
+  async function handleApproveAndFund() {
+    if (!hackathon) return;
+    if (!TREASURY_ADDRESS) {
+      toast.error("Set VITE_TREASURY_CONTRACT_ADDRESS before funding the treasury.");
+      return;
+    }
+    try {
+      setStep("approving");
+      await approveTreasurySpending({
+        tokenAddress: hackathon.payoutTokenEvmAddress,
+        treasuryAddress: TREASURY_ADDRESS,
+        amount: totalPrize.toString(),
+      });
+      setStep("funding");
+      const txHash = await bootstrapHackathonTreasury({
+        treasuryAddress: TREASURY_ADDRESS,
+        hackathon,
+      });
+      await syncFunding.mutateAsync(txHash);
+      toast.success("Treasury funded and synced from Hedera Testnet.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setStep("idle");
+    }
   }
-
-  if (!hackathon) {
-    return (
-      <div className="max-w-lg mx-auto space-y-3 py-12">
-        <p className="text-sm text-muted-foreground">No event found.</p>
-        {error ? <p className="text-xs text-destructive font-mono">{error}</p> : null}
-        <Link to="/hackathon" className="text-xs font-mono text-accent hover:underline">
-          Back to events
-        </Link>
-      </div>
-    );
-  }
-
-  const eligible = hackathon.submissions.filter((s) => s.eligibility?.passed);
-  const scored = hackathon.submissions.filter((s) => s.qualityScore);
-  const ineligible = hackathon.submissions.filter((s) => s.status === "ineligible");
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="border border-border bg-card p-6 space-y-4">
-        <div className="flex items-start justify-between">
-          <div className="space-y-1">
-            <h1 className="text-2xl font-black text-foreground">{hackathon.name}</h1>
-            <p className="text-xs text-muted-foreground">{hackathon.tagline}</p>
-          </div>
-          <div className="flex items-center gap-2 bg-primary/10 border border-primary/30 px-3 py-2">
-            <Lock className="h-3.5 w-3.5 text-primary" />
-            <div className="text-right">
-              <p className="text-lg font-black font-mono text-foreground">{formatUSD(hackathon.prizePool)}</p>
-              <p className="text-[9px] font-mono text-primary">LOCKED IN ESCROW</p>
+    <div className="mx-auto max-w-5xl space-y-6">
+      {hackathonQuery.isLoading ? <div className="text-sm text-muted-foreground">Loading treasury details…</div> : null}
+      {hackathonQuery.error ? <div className="text-sm text-destructive">{(hackathonQuery.error as Error).message}</div> : null}
+
+      {hackathon ? (
+        <>
+          <div className="flex items-start justify-between gap-6">
+            <div>
+              <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-accent">Treasury Control</p>
+              <h1 className="mt-2 text-3xl font-black text-foreground">{hackathon.name}</h1>
+              <p className="mt-2 text-sm text-muted-foreground">{hackathon.tagline}</p>
             </div>
+            {!auth.authenticated ? (
+              <Button onClick={auth.openAuthDialog}>
+                <Wallet className="mr-2 h-4 w-4" />
+                Connect organizer wallet
+              </Button>
+            ) : null}
           </div>
-        </div>
 
-        {/* Stats row */}
-        <div className="grid grid-cols-4 gap-3">
-          {[
-            { label: "Submissions", value: hackathon.submissions.length, icon: Users },
-            { label: "Eligible", value: eligible.length, icon: CheckCircle2 },
-            { label: "Scored", value: scored.length, icon: Shield },
-            { label: "Judging Ends", value: timeRemaining(hackathon.judgingEndsAt), icon: Clock },
-          ].map((s) => (
-            <div key={s.label} className="bg-secondary/50 p-3 space-y-1">
-              <div className="flex items-center gap-1.5">
-                <s.icon className="h-3 w-3 text-muted-foreground" />
-                <span className="text-[10px] text-muted-foreground">{s.label}</span>
+          <section className="rounded-xl border border-border bg-card p-5">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-bold text-foreground">Funding status</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Judge signer {hackathon.judgeEvmAddress} must approve high-value actions. The organizer funds the treasury directly on Hedera Testnet.
+                </p>
               </div>
-              <p className="text-sm font-bold font-mono text-foreground">{s.value}</p>
+
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => void handleApproveAndFund()}
+                  disabled={!canFund || step !== "idle" || Boolean(hackathon.treasuryTxHash)}
+                >
+                  {step === "approving" ? "Approving token…" : step === "funding" ? "Funding treasury…" : "Approve + fund treasury"}
+                </Button>
+              </div>
             </div>
-          ))}
-        </div>
-      </div>
 
-      {/* Tracks */}
-      <div className="space-y-3">
-        <h2 className="text-sm font-bold text-foreground">Tracks & Prizes</h2>
-        <div className="grid grid-cols-3 gap-3">
-          {hackathon.tracks.map((track) => {
-            const trackSubs = hackathon.submissions.filter((s) => s.trackId === track.id);
-            const topSub = trackSubs
-              .filter((s) => s.qualityScore)
-              .sort((a, b) => (b.qualityScore?.score ?? 0) - (a.qualityScore?.score ?? 0))[0];
-            return (
-              <div key={track.id} className="border border-border bg-card p-4 space-y-3">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-xs font-bold text-foreground">{track.name}</p>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">{track.description}</p>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Trophy className="h-3 w-3 text-accent" />
-                    <span className="text-xs font-black font-mono text-accent">{formatUSD(track.prize)}</span>
-                  </div>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-[9px] font-mono text-muted-foreground uppercase">Requirements</p>
-                  {track.requirements.map((r, i) => (
-                    <p key={i} className="text-[10px] text-secondary-foreground flex items-center gap-1.5">
-                      <span className="h-1 w-1 bg-primary rounded-full shrink-0" />
-                      {r}
-                    </p>
-                  ))}
-                </div>
-                {topSub && (
-                  <div className="border-t border-border pt-2 mt-2">
-                    <p className="text-[9px] text-muted-foreground mb-1">Leading</p>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-foreground">{topSub.projectName}</span>
-                      <span className="text-[10px] font-mono text-accent">{topSub.qualityScore?.score}/100</span>
-                    </div>
-                  </div>
-                )}
-                <p className="text-[9px] text-muted-foreground">{trackSubs.length} submission{trackSubs.length !== 1 ? "s" : ""}</p>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+            {!TREASURY_ADDRESS ? (
+              <p className="mt-4 text-sm text-destructive">Set `VITE_TREASURY_CONTRACT_ADDRESS` in the web app to send the funding transaction.</p>
+            ) : null}
 
-      {/* Ranked submissions */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold text-foreground">Agent-Ranked Submissions</h2>
-          <Link
-            to={`/hackathon/submissions?h=${encodeURIComponent(hackathon.id)}`}
-            className="text-[10px] text-accent hover:underline flex items-center gap-1"
-          >
-            View all <ChevronRight className="h-3 w-3" />
-          </Link>
-        </div>
-
-        <div className="space-y-2">
-          {hackathon.submissions
-            .filter((s) => s.qualityScore)
-            .sort((a, b) => (b.qualityScore?.score ?? 0) - (a.qualityScore?.score ?? 0))
-            .map((sub, idx) => (
-              <Link
-                key={sub.id}
-                to={`/hackathon/submissions?h=${encodeURIComponent(hackathon.id)}&id=${encodeURIComponent(sub.id)}`}
-                className="block border border-border bg-card p-4 hover:border-accent/40 transition-colors group"
+            {hackathon.treasuryTxHash ? (
+              <a
+                href={`https://hashscan.io/testnet/transaction/${hackathon.treasuryTxHash}`}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-4 inline-flex items-center gap-1 text-sm text-primary hover:underline"
               >
-                <div className="flex items-center gap-4">
-                  <span className={cn(
-                    "text-lg font-black font-mono w-8 text-center",
-                    idx === 0 ? "text-accent" : "text-muted-foreground"
-                  )}>
-                    #{idx + 1}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-foreground group-hover:text-accent transition-colors">
-                        {sub.projectName}
-                      </span>
-                      <span className="text-[9px] font-mono px-1.5 py-0.5 bg-secondary text-secondary-foreground">
-                        {sub.teamName}
-                      </span>
-                      <span className="text-[9px] font-mono text-muted-foreground">
-                        {hackathon.tracks.find((t) => t.id === sub.trackId)?.name}
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{sub.description}</p>
-                  </div>
-                  <div className="text-right space-y-0.5">
-                    <p className={cn(
-                      "text-lg font-black font-mono",
-                      (sub.qualityScore?.score ?? 0) >= 85 ? "text-primary" :
-                      (sub.qualityScore?.score ?? 0) >= 70 ? "text-accent" : "text-muted-foreground"
-                    )}>
-                      {sub.qualityScore?.score}
-                    </p>
-                    <p className="text-[9px] text-muted-foreground font-mono">/ 100</p>
-                  </div>
-                </div>
-              </Link>
-            ))}
+                <ShieldCheck className="h-4 w-4" />
+                Funding synced on HashScan
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            ) : (
+              <p className="mt-4 text-sm text-muted-foreground">No funding receipt has been synced yet.</p>
+            )}
+          </section>
 
-          {/* Ineligible */}
-          {ineligible.map((sub) => (
-            <div
-              key={sub.id}
-              className="border border-destructive/20 bg-destructive/5 p-4 opacity-60"
-            >
-              <div className="flex items-center gap-4">
-                <XCircle className="h-4 w-4 text-destructive shrink-0" />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-foreground">{sub.projectName}</span>
-                    <span className="text-[9px] font-mono text-destructive">INELIGIBLE</span>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">{sub.eligibility?.notes}</p>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+          <section className="grid gap-4 md:grid-cols-2">
+            {hackathon.tracks.map((track) => (
+              <article key={track.id} className="rounded-xl border border-border bg-card p-5">
+                <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-accent">{track.sponsorName}</p>
+                <h3 className="mt-2 text-lg font-bold text-foreground">{track.name}</h3>
+                <p className="mt-2 text-sm text-muted-foreground">{track.description}</p>
+                <p className="mt-4 text-sm text-foreground">{money(track.prizeAmount)} units</p>
+                <ul className="mt-3 space-y-1 text-sm text-muted-foreground">
+                  {track.requirements.map((requirement) => (
+                    <li key={requirement}>• {requirement}</li>
+                  ))}
+                </ul>
+              </article>
+            ))}
+          </section>
+        </>
+      ) : null}
     </div>
   );
 }

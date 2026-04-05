@@ -14,11 +14,7 @@ interface ImportMetaEnv {
   readonly VITE_HEDERA_EVM_RPC?: string;
   /** Optional Hedera mirror REST base (MetaMask sign-in resolves 0.0.x from EVM address); defaults to testnet mirror */
   readonly VITE_HEDERA_MIRROR_BASE?: string;
-  /**
-   * JudgeBuddy: when `false`, events load from `GET /hackathons` and creates go to `POST /hackathons` (server JSON store).
-   * Default / unset = mock data. Requires `VITE_HEDERA_API_URL`.
-   */
-  readonly VITE_HACKATHON_MOCKUP?: string;
+  readonly VITE_TREASURY_CONTRACT_ADDRESS?: string;
 }
 
 interface ImportMeta {

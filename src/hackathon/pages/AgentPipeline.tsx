@@ -1,218 +1,183 @@
-import { MOCK_AGENT_ACTIVITY } from "../mockData";
-import { useHackathonList } from "../HackathonListContext";
-import { Bot, CheckCircle2, Shield, Sparkles, ExternalLink, Layers } from "lucide-react";
-import { cn } from "@/lib/utils";
-import type { AgentRole } from "../types";
+import { useSearchParams } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ExternalLink, Shield, Wallet } from "lucide-react";
+import { approveAward, fetchPipeline } from "@/hackathon/api";
+import { signApprovalRequest } from "@/hackathon/ledger";
+import { useAuth } from "@/auth/useAuth";
+import { Button } from "@/components/ui/button";
+import type { ApprovalRequest } from "@/hackathon/types";
+import { toast } from "sonner";
 
-function timeAgo(ts: number) {
-  const diff = Date.now() / 1000 - ts;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
+function formatFieldValue(value: string): string {
+  return value.length > 84 ? `${value.slice(0, 84)}…` : value;
 }
 
-const agentConfig: Record<AgentRole, { label: string; desc: string; icon: typeof Bot; color: string }> = {
-  eligibility: {
-    label: "Sentinel",
-    desc: "Checks repo, demo, and rule compliance. Binary pass/fail.",
-    icon: CheckCircle2,
-    color: "text-primary",
-  },
-  "track-fit": {
-    label: "TrackFit",
-    desc: "Reads track requirements and scores project alignment.",
-    icon: Shield,
-    color: "text-accent",
-  },
-  quality: {
-    label: "Oracle",
-    desc: "LLM trained on top hackathon winners. Scores 0–100 with reasoning.",
-    icon: Sparkles,
-    color: "text-[hsl(var(--state-submitted))]",
-  },
-  payout: {
-    label: "Settler",
-    desc: "Executes USDC payout via smart contract on winner confirmation.",
-    icon: Bot,
-    color: "text-[hsl(var(--state-verified))]",
-  },
-  clustering: {
-    label: "Converge",
-    desc: "Embedding similarity + LLM labels group submissions by project theme for judges.",
-    icon: Layers,
-    color: "text-violet-500",
-  },
-};
-
-const PIPELINE_AGENT_ROLES = ["eligibility", "track-fit", "quality", "clustering"] as const satisfies readonly AgentRole[];
-
-function agentBadgeIndex(role: AgentRole): string {
-  const order: Record<(typeof PIPELINE_AGENT_ROLES)[number], string> = {
-    eligibility: "1",
-    "track-fit": "2",
-    quality: "3",
-    clustering: "4",
-  };
-  return order[role as keyof typeof order] ?? "?";
-}
-
-function agentProgressClass(role: AgentRole): string {
-  if (role === "eligibility") return "bg-primary";
-  if (role === "track-fit") return "bg-accent";
-  if (role === "quality") return "bg-[hsl(var(--state-submitted))]";
-  if (role === "clustering") return "bg-violet-500";
-  return "bg-muted-foreground";
+async function signAndApprove(request: ApprovalRequest) {
+  const signature = await signApprovalRequest(request);
+  return approveAward(
+    request.awardId,
+    (request.clearSigningManifest as { rawPayload: Record<string, unknown> }).rawPayload,
+    signature,
+  );
 }
 
 export default function AgentPipeline() {
-  const { hackathons, loading } = useHackathonList();
-  const hackathon = hackathons[0];
-  const totalChecked = hackathon?.submissions.filter((s) => s.eligibility).length ?? 0;
-  const totalScored = hackathon?.submissions.filter((s) => s.qualityScore).length ?? 0;
+  const [searchParams] = useSearchParams();
+  const queryClient = useQueryClient();
+  const auth = useAuth();
+  const hackathonId = searchParams.get("h") ?? undefined;
 
-  if (loading && !hackathon) {
-    return (
-      <div className="max-w-5xl mx-auto py-16 text-center text-sm text-muted-foreground">Loading…</div>
-    );
-  }
+  const pipelineQuery = useQuery({
+    queryKey: ["pipeline", hackathonId],
+    queryFn: () => fetchPipeline(hackathonId),
+    refetchInterval: 4000,
+  });
 
-  if (!hackathon) {
-    return (
-      <div className="max-w-5xl mx-auto py-12 text-sm text-muted-foreground">
-        No hackathon events loaded. Create one or enable mock data.
-      </div>
-    );
-  }
+  const approveMutation = useMutation({
+    mutationFn: signAndApprove,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["pipeline", hackathonId] });
+      await queryClient.invalidateQueries({ queryKey: ["submissions"] });
+      toast.success("Approval signed and execution queued.");
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : String(error));
+    },
+  });
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-xl font-black text-foreground">Agent Pipeline</h1>
-        <p className="text-xs text-muted-foreground mt-1">
-          Four autonomous agents verify, score, and group submissions. Humans make the final call.
-        </p>
+    <div className="mx-auto max-w-6xl space-y-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-[10px] font-mono uppercase tracking-[0.28em] text-accent">Ledger Queue</p>
+          <h1 className="mt-2 text-3xl font-black text-foreground">Approval and execution pipeline</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Review the exact EIP-712 action, clear-signing summary, digest, destination calldata, worker jobs, and HCS audit stream.
+          </p>
+        </div>
+        {!auth.authenticated ? (
+          <Button onClick={auth.openAuthDialog}>
+            <Wallet className="mr-2 h-4 w-4" />
+            Connect signer
+          </Button>
+        ) : (
+          <div className="rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-right">
+            <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-primary">Connected signer</p>
+            <p className="mt-1 text-sm font-medium text-foreground">{auth.user?.accountId}</p>
+            <p className="text-[11px] text-muted-foreground">{auth.user?.evmAddress}</p>
+          </div>
+        )}
       </div>
 
-      {/* Agent cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        {PIPELINE_AGENT_ROLES.map((role) => {
-          const cfg = agentConfig[role];
-          const Icon = cfg.icon;
-          const activity = MOCK_AGENT_ACTIVITY.filter((a) => a.agentRole === role);
-          const denom =
-            role === "clustering" && hackathon.similarityClusters?.length
-              ? hackathon.submissions.length
-              : Math.max(hackathon.submissions.length, 1);
-          const numer =
-            role === "clustering" && hackathon.similarityClusters?.length
-              ? hackathon.submissions.length
-              : activity.length;
+      <section className="space-y-4">
+        {pipelineQuery.data?.approvals.map((approval) => {
+          const manifest = approval.clearSigningManifest as {
+            summary: string;
+            fields: Array<{ label: string; value: string }>;
+            functionName: string;
+            calldataPreview: string;
+            claimMetadata?: { metadataURI: string };
+          };
+          const canSign =
+            auth.user?.evmAddress?.toLowerCase() === approval.signerEvmAddress.toLowerCase() && approval.status === "pending";
           return (
-            <div key={role} className="border border-border bg-card p-5 space-y-4">
-              <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <Icon className={cn("h-4 w-4", cfg.color)} />
-                    <p className="text-sm font-bold text-foreground">{cfg.label}</p>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground leading-relaxed">{cfg.desc}</p>
+            <article key={approval.id} className="rounded-xl border border-border bg-card p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-accent">{approval.actionType}</p>
+                  <h2 className="mt-1 text-xl font-bold text-foreground">{manifest.summary}</h2>
+                  <p className="mt-2 text-sm text-muted-foreground">Digest {approval.digest}</p>
                 </div>
-                <span className="text-[9px] font-mono px-1.5 py-0.5 bg-secondary text-secondary-foreground">
-                  Agent {agentBadgeIndex(role)}
+                <span className="rounded-full bg-secondary px-3 py-1 text-[10px] font-mono uppercase tracking-[0.24em] text-secondary-foreground">
+                  {approval.status}
                 </span>
               </div>
 
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-[10px]">
-                  <span className="text-muted-foreground">{role === "clustering" ? "Runs" : "Processed"}</span>
-                  <span className="font-mono text-foreground">
-                    {role === "clustering" && hackathon.similarityClusters?.length
-                      ? `${hackathon.similarityClusters.length} groups`
-                      : `${activity.length} submissions`}
-                  </span>
-                </div>
-                <div className="h-1 bg-secondary rounded-full overflow-hidden">
-                  <div
-                    className={cn("h-full rounded-full", agentProgressClass(role))}
-                    style={{ width: `${(numer / denom) * 100}%` }}
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <p className="text-[9px] font-mono text-muted-foreground uppercase">Recent activity</p>
-                {activity.slice(0, 3).map((a) => (
-                  <div key={a.id} className="flex items-center gap-2 text-[10px]">
-                    <span className="text-muted-foreground">{timeAgo(a.timestamp)}</span>
-                    <span className="text-secondary-foreground truncate flex-1">{a.action}</span>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {manifest.fields?.map((field) => (
+                  <div key={field.label} className="rounded-lg border border-border p-3">
+                    <p className="text-[10px] font-mono uppercase tracking-[0.24em] text-muted-foreground">{field.label}</p>
+                    <p className="mt-1 text-sm text-foreground">{formatFieldValue(field.value)}</p>
                   </div>
                 ))}
               </div>
-            </div>
+
+              {manifest.claimMetadata?.metadataURI ? (
+                <div className="mt-4 rounded-lg border border-border p-4 text-sm text-muted-foreground">
+                  Claim metadata URI: <span className="font-mono text-foreground">{manifest.claimMetadata.metadataURI}</span>
+                </div>
+              ) : null}
+
+              <div className="mt-4 rounded-lg border border-border p-4">
+                <div className="flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-primary" />
+                  <p className="text-sm font-medium text-foreground">Destination call</p>
+                </div>
+                <p className="mt-2 text-sm text-muted-foreground">{manifest.functionName}</p>
+                <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-[11px] text-muted-foreground">{manifest.calldataPreview}</pre>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button onClick={() => approveMutation.mutate(approval)} disabled={!canSign || approveMutation.isPending}>
+                  Sign and queue execution
+                </Button>
+                <a
+                  href={`https://hashscan.io/testnet/account/${approval.signerEvmAddress}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                >
+                  Signer on HashScan <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
+            </article>
           );
         })}
-      </div>
 
-      {/* Pipeline visualization */}
-      <div className="space-y-3">
-        <h2 className="text-sm font-bold text-foreground">Verification Flow</h2>
-        <div className="border border-border bg-card p-5">
-          <div className="flex items-center justify-between">
-            {[
-              { label: "Submitted", count: hackathon.submissions.length, color: "bg-muted-foreground" },
-              { label: "Eligibility Check", count: totalChecked, color: "bg-primary" },
-              { label: "Track Fit Scored", count: hackathon.submissions.filter((s) => s.trackFit).length, color: "bg-accent" },
-              { label: "Quality Scored", count: totalScored, color: "bg-[hsl(var(--state-submitted))]" },
-              { label: "Ready for Judges", count: totalScored, color: "bg-primary" },
-            ].map((step, i, arr) => (
-              <div key={step.label} className="flex items-center gap-3">
-                <div className="text-center space-y-1">
-                  <div className={cn("h-8 w-8 rounded-full flex items-center justify-center mx-auto", step.color)}>
-                    <span className="text-xs font-black text-background">{step.count}</span>
-                  </div>
-                  <p className="text-[9px] text-muted-foreground max-w-[80px]">{step.label}</p>
-                </div>
-                {i < arr.length - 1 && (
-                  <div className="h-px w-8 bg-border" />
-                )}
+        {!pipelineQuery.isLoading && (pipelineQuery.data?.approvals.length ?? 0) === 0 ? (
+          <div className="rounded-xl border border-dashed border-border p-8 text-sm text-muted-foreground">
+            No approval requests are pending. Queue evaluation on a submission whose prize exceeds the autonomous threshold to generate one.
+          </div>
+        ) : null}
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <article className="rounded-xl border border-border bg-card p-5">
+          <h2 className="text-lg font-bold text-foreground">Worker jobs</h2>
+          <div className="mt-4 space-y-3 text-sm">
+            {pipelineQuery.data?.jobs.slice(0, 8).map((job) => (
+              <div key={String(job.id)} className="rounded-lg border border-border p-3">
+                <p className="font-medium text-foreground">{String(job.type)}</p>
+                <p className="mt-1 text-muted-foreground">{String(job.status)}</p>
               </div>
             ))}
           </div>
-        </div>
-      </div>
+        </article>
 
-      {/* Audit trail */}
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-bold text-foreground">Hedera Audit Trail</h2>
-          <span className="text-[9px] font-mono px-1.5 py-0.5 bg-secondary text-secondary-foreground">HCS</span>
-        </div>
-        <div className="border border-border bg-card divide-y divide-border">
-          {MOCK_AGENT_ACTIVITY.sort((a, b) => b.timestamp - a.timestamp).map((a) => {
-            const cfg = agentConfig[a.agentRole];
-            const Icon = cfg.icon;
-            return (
-              <div key={a.id} className="px-4 py-3 flex items-center gap-3">
-                <Icon className={cn("h-3.5 w-3.5 shrink-0", cfg.color)} />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-mono text-foreground">{a.agentName}</span>
-                    <span className="text-[10px] text-secondary-foreground truncate">{a.action}</span>
-                  </div>
-                </div>
-                <span className="text-[9px] text-muted-foreground shrink-0">{timeAgo(a.timestamp)}</span>
-                <a
-                  href="#"
-                  className="flex items-center gap-1 text-[9px] font-mono text-muted-foreground hover:text-foreground shrink-0"
-                  title={a.hederaTxId}
-                >
-                  HCS <ExternalLink className="h-2.5 w-2.5" />
-                </a>
+        <article className="rounded-xl border border-border bg-card p-5">
+          <h2 className="text-lg font-bold text-foreground">HCS audit</h2>
+          <div className="mt-4 space-y-3 text-sm">
+            {pipelineQuery.data?.hcsAudit.slice(0, 8).map((event) => (
+              <div key={String(event.id)} className="rounded-lg border border-border p-3">
+                <p className="font-medium text-foreground">{String(event.type)}</p>
+                <p className="mt-1 text-muted-foreground">{String(event.txId ?? "pending")}</p>
               </div>
-            );
-          })}
-        </div>
-      </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="rounded-xl border border-border bg-card p-5">
+          <h2 className="text-lg font-bold text-foreground">Timeline</h2>
+          <div className="mt-4 space-y-3 text-sm">
+            {pipelineQuery.data?.events.slice(0, 8).map((event) => (
+              <div key={event.id} className="rounded-lg border border-border p-3">
+                <p className="font-medium text-foreground">{event.type}</p>
+                <p className="mt-1 text-muted-foreground">{event.createdAt}</p>
+              </div>
+            ))}
+          </div>
+        </article>
+      </section>
     </div>
   );
 }

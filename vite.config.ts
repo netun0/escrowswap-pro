@@ -17,6 +17,8 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),
+        "@shared": path.resolve(__dirname, "./packages/shared/src"),
+        "@ledger-clear-signing": path.resolve(__dirname, "./packages/ledger-clear-signing/src"),
       },
       dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime", "@tanstack/react-query", "@tanstack/query-core"],
     },

@@ -1,4 +1,4 @@
-export type WalletSource = "hashpack" | "metamask";
+export type WalletSource = "metamask";
 export type HederaNetwork = "testnet";
 
 export type AuthChallenge = {
