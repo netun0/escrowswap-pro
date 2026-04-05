@@ -22,7 +22,6 @@ import { AuthRequiredCta } from "@/components/AuthRequiredCta";
 import {
   ensureHederaEvmChain,
   approveTokenForEscrow,
-  assertClientHasTokenBalance,
   fundTaskOnChain,
   releaseOnChain,
   refundOnChain,
@@ -57,7 +56,7 @@ const LEDGER_LABELS: { key: keyof TaskLedgerTx; label: string }[] = [
 export default function TaskDetail() {
   const { id } = useParams<{ id: string }>();
   const { tasks, advanceState, txPending, syncOnChain } = useEscrow();
-  const { authenticated, openAuthDialog, user } = useAuth();
+  const { associateToken, authenticated, openAuthDialog, user, wallet } = useAuth();
 
   const task = tasks.find((t) => t.id === Number(id));
   const [browserEvm, setBrowserEvm] = useState<string | null>(null);
@@ -117,6 +116,7 @@ export default function TaskDetail() {
   const isVerifier = idsEqual(accountId, task.verifier);
   const humanVerifier = task.verifierMode === "human";
   const autonomousVerifier = task.verifierMode === "autonomous";
+  const nativeHtsAssociationReady = wallet.canExecuteNativeTransactions;
   const evmClientWalletMismatch = Boolean(
     task.escrowContract &&
       task.state === "Open" &&
@@ -150,12 +150,18 @@ export default function TaskDetail() {
   const runFundOnChain = () =>
     runTx(async () => {
       const eth = getInjectedEip1193();
-      if (!eth) throw new Error("No injected wallet (window.ethereum).");
+      if (!eth) {
+        throw new Error(
+          "No injected EVM wallet (window.ethereum). HTS association can use HashPack, but approve + fund still require an EVM wallet on Hedera Testnet (chain 296).",
+        );
+      }
       if (!task.escrowContract) throw new Error("Not an on-chain escrow task.");
       await ensureHederaEvmChain(eth);
-      const approveTx = await approveTokenForEscrow(task);
-      await approveTx.wait();
-      await assertClientHasTokenBalance(task);
+      const approveTx = await approveTokenForEscrow(task, {
+        associateToken,
+        canExecuteNativeTransactions: nativeHtsAssociationReady,
+      });
+      if (approveTx) await approveTx.wait();
       const fundTx = await fundTaskOnChain(task);
       const rec = await fundTx.wait();
       await syncOnChain(task.id, rec?.hash);
@@ -501,7 +507,7 @@ export default function TaskDetail() {
                       onClick={runFundOnChain}
                     >
                       {txPending ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
-                      Approve token &amp; fund escrow (EVM)
+                      {nativeHtsAssociationReady ? "Associate token, approve & fund" : "Approve token & fund escrow (EVM)"}
                     </Button>
                   ) : (
                     <Button
@@ -587,10 +593,21 @@ export default function TaskDetail() {
               <p className="text-[10px] text-muted-foreground font-mono border border-border bg-muted/20 px-3 py-2">
                 {task.escrowContract && !ESCROW_USE_MOCK ? (
                   <>
-                    Connect a wallet on <strong>Hedera Testnet EVM</strong> (chain 296) with the <strong>same keys as your 0.0.x</strong>{" "}
-                    client account. The app sends <code className="text-foreground">associate()</code> on the HTS token if needed, then{" "}
-                    <code className="text-foreground">approve</code> + <code className="text-foreground">fundTask</code>. You need a token
-                    balance and HBAR for gas.
+                    Connect an EVM wallet on <strong>Hedera Testnet</strong> (chain 296) with the <strong>same keys as your 0.0.x</strong>{" "}
+                    client account. {nativeHtsAssociationReady ? (
+                      <>
+                        This HashPack session can submit native <code className="text-foreground">TokenAssociateTransaction</code> in-app
+                        if the token is not associated yet, then the browser wallet signs <code className="text-foreground">approve</code>{" "}
+                        + <code className="text-foreground">fundTask</code>.
+                      </>
+                    ) : (
+                      <>
+                        MetaMask / injected wallets only handle <code className="text-foreground">approve</code> +{" "}
+                        <code className="text-foreground">fundTask</code>. If HTS token <code className="text-foreground">{task.paymentToken}</code>{" "}
+                        is not associated to this client wallet yet, associate it manually or sign in with HashPack first.
+                      </>
+                    )}{" "}
+                    You need token balance plus HBAR for gas.
                   </>
                 ) : (
                   <>

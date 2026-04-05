@@ -42,11 +42,17 @@ const HASHPACK_SOURCE: WalletSource = "hashpack";
 const METAMASK_SOURCE: WalletSource = "metamask";
 const WALLET_CONNECT_CONFIGURED = Boolean((import.meta.env.VITE_WALLETCONNECT_PROJECT_ID as string | undefined)?.trim());
 
-function toWalletConnection(state: HederaWalletState | null, ready: boolean, sessionUser: AuthenticatedUser | null): WalletConnection {
+function toWalletConnection(
+  state: HederaWalletState | null,
+  ready: boolean,
+  sessionUser: AuthenticatedUser | null,
+  nativeCapable: boolean,
+): WalletConnection {
   const walletSource: WalletSource =
     sessionUser?.walletSource ?? (state?.walletName === "MetaMask" ? METAMASK_SOURCE : HASHPACK_SOURCE);
   return {
     accountId: state?.accountId ?? sessionUser?.accountId ?? null,
+    canExecuteNativeTransactions: walletSource === HASHPACK_SOURCE && nativeCapable,
     connected: state?.connected ?? Boolean(sessionUser),
     network: state?.network ?? sessionUser?.network ?? null,
     ready,
@@ -393,8 +399,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const associateToken = useCallback<AuthSession["associateToken"]>(async (accountId, tokenId) => {
+    if (user?.walletSource !== HASHPACK_SOURCE) {
+      throw new Error("In-app HTS association requires HashPack sign-in. Use HashPack or associate the token manually in your wallet.");
+    }
+
+    const client = clientRef.current;
+    if (!client) {
+      throw new Error("HashPack native session is not ready. Reconnect HashPack and try again.");
+    }
+
+    if (!walletState?.canExecuteNativeTransactions || !walletState.accountId) {
+      throw new Error("HashPack is not connected for native Hedera transactions. Reconnect HashPack and try again.");
+    }
+
+    if (walletState.accountId !== accountId) {
+      throw new Error(`HashPack is connected to ${walletState.accountId}. Switch to ${accountId} before associating this token.`);
+    }
+
+    return client.associateToken(accountId, tokenId);
+  }, [user?.walletSource, walletState?.accountId, walletState?.canExecuteNativeTransactions]);
+
+  const nativeCapable = Boolean(walletState?.canExecuteNativeTransactions && walletState.connected && clientRef.current);
+
   const value = useMemo<AuthSession>(
     () => ({
+      associateToken,
       authDialogOpen,
       authError,
       authStatus,
@@ -407,14 +437,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signInWithMetaMask,
       signOut,
       user,
-      wallet: toWalletConnection(walletState, walletReady, user),
+      wallet: toWalletConnection(walletState, walletReady, user, nativeCapable),
     }),
     [
+      associateToken,
       authDialogOpen,
       authError,
       authStatus,
       closeAuthDialog,
       loading,
+      nativeCapable,
       openAuthDialog,
       refreshSession,
       signIn,
@@ -449,8 +481,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               Sign in
             </DialogTitle>
             <DialogDescription>
-              Choose <strong>MetaMask</strong> (injected EVM on Hedera chain 296) or <strong>HashPack</strong> via WalletConnect. You
-              will sign a one-time message to open a session with the API.
+              Choose <strong>MetaMask</strong> for Hedera EVM actions or <strong>HashPack</strong> via WalletConnect for sign-in and
+              native HTS token association. You will sign a one-time message to open a session with the API.
             </DialogDescription>
           </DialogHeader>
 
@@ -472,6 +504,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 <span className="font-mono uppercase tracking-widest">Network</span>
                 <span className="font-medium text-foreground uppercase">
                   {value.wallet.network ?? AUTH_NETWORK}
+                </span>
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <span className="font-mono uppercase tracking-widest">HTS native</span>
+                <span className="font-medium text-foreground">
+                  {value.wallet.canExecuteNativeTransactions ? "Ready" : "Manual / MetaMask only"}
                 </span>
               </div>
             </div>
