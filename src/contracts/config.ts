@@ -17,6 +17,12 @@ export function hashscanTransactionUrl(transactionId: string): string {
   return `${CHAIN_CONFIG.blockExplorer}/transaction/${slug}`;
 }
 
+/** HashScan message tab for an HCS submit transaction. */
+export function hashscanTransactionMessageUrl(transactionId: string): string {
+  const slug = transactionId.includes("@") ? transactionId.replace("@", "-") : transactionId;
+  return `${CHAIN_CONFIG.blockExplorer}/transaction/${slug}/message`;
+}
+
 /** HashScan URL for an EVM `0x` transaction hash on the same network as `CHAIN_CONFIG`. */
 export function hashscanEvmTxUrl(txHash: string): string {
   const hex = txHash.startsWith("0x") ? txHash : `0x${txHash}`;

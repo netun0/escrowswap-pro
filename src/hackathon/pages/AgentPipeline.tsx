@@ -8,6 +8,7 @@ import { signAwardApproval } from "@/hackathon/evm";
 import { formatDateTime, formatTokenAmount, relativeTime, shorten } from "@/hackathon/format";
 import { useAuth } from "@/auth/useAuth";
 import { Button } from "@/components/ui/button";
+import { hashscanEvmTxUrl, hashscanTransactionMessageUrl } from "@/contracts/config";
 
 export default function AgentPipeline() {
   const [params, setParams] = useSearchParams();
@@ -287,30 +288,54 @@ export default function AgentPipeline() {
               <div className="border border-border bg-card p-6">
                 <h2 className="text-lg font-black text-foreground">Event stream</h2>
                 <div className="mt-4 space-y-3">
-                  {(events.data ?? []).slice(0, 16).map((event) => (
-                    <div key={event.id} className="border border-border bg-background/40 p-3 text-sm">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-mono text-foreground">{event.type}</div>
-                          <div className="mt-1 text-[11px] text-muted-foreground">
-                            {event.source} · {relativeTime(event.createdAt)}
+                  {(events.data ?? []).slice(0, 16).map((event) => {
+                    const txHref = event.txHash ? hashscanEvmTxUrl(event.txHash) : null;
+                    const hcsHref = event.hcsTxId ? hashscanTransactionMessageUrl(event.hcsTxId) : null;
+                    const primaryHref = hcsHref ?? txHref;
+
+                    const content = (
+                      <>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-mono text-foreground">{event.type}</div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              {event.source} · {relativeTime(event.createdAt)}
+                            </div>
                           </div>
+                          {primaryHref ? (
+                            <div className="flex flex-col items-end gap-1 text-[11px] text-accent">
+                              <span className="inline-flex items-center gap-1">
+                                {hcsHref ? "HCS message" : "Tx"}
+                                <ExternalLink className="h-3 w-3" />
+                              </span>
+                            </div>
+                          ) : null}
                         </div>
-                        {event.txHash ? (
-                          <a
-                            href={`https://hashscan.io/testnet/transaction/${event.txHash}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-[11px] text-accent"
-                          >
-                            HashScan
-                            <ExternalLink className="h-3 w-3" />
-                          </a>
+                        <div className="mt-2 text-[11px] text-muted-foreground">{formatDateTime(event.createdAt)}</div>
+                        {event.hcsTopicId && event.hcsSequenceNumber ? (
+                          <div className="mt-1 font-mono text-[11px] text-muted-foreground">
+                            topic {event.hcsTopicId} · seq {event.hcsSequenceNumber}
+                          </div>
                         ) : null}
+                      </>
+                    );
+
+                    return primaryHref ? (
+                      <a
+                        key={event.id}
+                        href={primaryHref}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block border border-border bg-background/40 p-3 text-sm transition-colors hover:border-accent/60 hover:bg-background/70"
+                      >
+                        {content}
+                      </a>
+                    ) : (
+                      <div key={event.id} className="border border-border bg-background/40 p-3 text-sm">
+                        {content}
                       </div>
-                      <div className="mt-2 text-[11px] text-muted-foreground">{formatDateTime(event.createdAt)}</div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>

@@ -13,6 +13,9 @@ import {
   toOnchainId,
 } from "../../packages/shared/src/index.js";
 import {
+  ESCROW_CONTRACT_ADDRESS,
+  HCS_TOPIC_ID,
+  HEDERA_DRY_RUN,
   HEDERA_EVM_RPC,
   MIRROR_BASE,
   NETWORK,
@@ -48,6 +51,8 @@ import {
   upsertPrizeClaim,
 } from "./store.js";
 import { getSubmissionClusters } from "./submissionClusters.js";
+import { createTaskRouter } from "./taskRouter.js";
+import { taskStoreInfo } from "./taskStore.js";
 import { getTreasuryWriteContract, treasuryInterface, treasuryProvider } from "./treasuryContract.js";
 
 type StoredSession = {
@@ -159,7 +164,7 @@ async function appendAudit(type: string, payload: Record<string, unknown>) {
     submissionId: typeof payload.submissionId === "string" ? payload.submissionId : null,
     awardId: typeof payload.awardId === "string" ? payload.awardId : null,
     txId: hcs.txId,
-    topicId: hcs.ok ? "configured" : null,
+    topicId: hcs.ok ? HCS_TOPIC_ID : null,
     sequenceNumber: hcs.sequenceNumber,
     payload,
   });
@@ -174,11 +179,16 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/health", async (_req, res) => {
+  const taskStore = taskStoreInfo();
   res.json({
     ok: true,
     network: NETWORK,
     mirrorBase: MIRROR_BASE,
     hederaEvmRpc: HEDERA_EVM_RPC,
+    taskEscrowConfigured: Boolean(ESCROW_CONTRACT_ADDRESS),
+    taskStorePath: taskStore.path,
+    taskCount: taskStore.count,
+    dryRun: HEDERA_DRY_RUN,
     treasuryContractConfigured: Boolean(TREASURY_CONTRACT_ADDRESS),
     prizeClaimTokenConfigured: Boolean(PRIZE_CLAIM_TOKEN_ADDRESS),
   });
@@ -272,6 +282,13 @@ app.post("/auth/logout", (req, res) => {
   clearSessionCookie(res);
   res.status(204).end();
 });
+
+app.use(
+  createTaskRouter({
+    mirrorAccountEvm,
+    requireAuthSession,
+  }),
+);
 
 app.get("/hackathons", async (_req, res) => {
   res.json(await listHackathons());

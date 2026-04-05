@@ -231,6 +231,9 @@ export const eventEnvelopeSchema = z.object({
   awardId: z.string().nullable(),
   claimId: z.string().nullable(),
   txHash: z.string().nullable(),
+  hcsTxId: z.string().nullable().optional(),
+  hcsTopicId: z.string().nullable().optional(),
+  hcsSequenceNumber: z.string().nullable().optional(),
   payload: z.record(z.any()),
   createdAt: z.string(),
 });

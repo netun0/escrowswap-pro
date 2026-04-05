@@ -231,6 +231,7 @@ export function useEscrow() {
       try {
         const r = await fetch(`${HEDERA_API_URL}/tasks/${taskId}/onchain-sync`, {
           method: "POST",
+          credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(txHash ? { txHash } : {}),
         });

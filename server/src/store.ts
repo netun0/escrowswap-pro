@@ -1,5 +1,6 @@
 import type { PoolClient, QueryResultRow } from "pg";
 import { pool } from "./db.js";
+import { HCS_TOPIC_ID } from "./config.js";
 import {
   type ApprovalRequest,
   type AwardProposal,
@@ -114,6 +115,38 @@ function mapClaim(row: QueryResultRow | undefined): PrizeClaim | null {
     mintedTxHash: row.minted_tx_hash ?? null,
     redeemedTxHash: row.redeemed_tx_hash ?? null,
   };
+}
+
+function mapEventAuditType(eventType: string): string | null {
+  switch (eventType) {
+    case "hackathon.created":
+      return "hackathon_created";
+    case "treasury.funded":
+      return "treasury_funded";
+    case "submission.created":
+      return "submission_created";
+    case "award.approved":
+      return "award_approved";
+    case "claim.redeemed":
+      return "claim_redeemed";
+    default:
+      return null;
+  }
+}
+
+function makeAuditLookupKey(input: {
+  type: string;
+  hackathonId?: string | null;
+  submissionId?: string | null;
+  awardId?: string | null;
+}): string {
+  return [input.type, input.hackathonId ?? "", input.submissionId ?? "", input.awardId ?? ""].join("|");
+}
+
+function normalizeAuditTopicId(topicId: string | null | undefined): string | null {
+  if (!topicId) return null;
+  if (topicId === "configured") return HCS_TOPIC_ID || null;
+  return topicId;
 }
 
 function mapApproval(row: QueryResultRow): ApprovalRequest {
@@ -631,7 +664,7 @@ export async function listEvents(filters: {
   }
   const where = clauses.length ? `where ${clauses.join(" and ")}` : "";
   const rows = await pool.query(`select * from events ${where} order by created_at desc limit 250`, params);
-  return rows.rows.map((row: QueryResultRow) => ({
+  const events = rows.rows.map((row: QueryResultRow) => ({
     id: row.id,
     scope: row.scope,
     source: row.source,
@@ -642,9 +675,71 @@ export async function listEvents(filters: {
     awardId: row.award_id ?? null,
     claimId: row.claim_id ?? null,
     txHash: row.tx_hash ?? null,
+    hcsTxId: null,
+    hcsTopicId: null,
+    hcsSequenceNumber: null,
     payload: row.payload ?? {},
     createdAt: new Date(row.created_at).toISOString(),
   }));
+
+  const auditTypes = Array.from(
+    new Set(events.map((event) => mapEventAuditType(event.type)).filter((value): value is string => Boolean(value))),
+  );
+  if (auditTypes.length === 0) return events;
+
+  const auditClauses: string[] = [];
+  const auditParams: unknown[] = [];
+
+  auditParams.push(auditTypes);
+  auditClauses.push(`type = any($${auditParams.length}::text[])`);
+
+  if (filters.hackathonId) {
+    auditParams.push(filters.hackathonId);
+    auditClauses.push(`hackathon_id = $${auditParams.length}`);
+  }
+  if (filters.submissionId) {
+    auditParams.push(filters.submissionId);
+    auditClauses.push(`submission_id = $${auditParams.length}`);
+  }
+
+  const auditWhere = auditClauses.length ? `where ${auditClauses.join(" and ")}` : "";
+  const auditRows = await pool.query(`select * from hcs_audit_events ${auditWhere} order by created_at desc limit 250`, auditParams);
+  const auditsByKey = new Map<string, QueryResultRow>();
+
+  for (const row of auditRows.rows) {
+    const key = makeAuditLookupKey({
+      type: row.type,
+      hackathonId: row.hackathon_id ?? null,
+      submissionId: row.submission_id ?? null,
+      awardId: row.award_id ?? null,
+    });
+    if (!auditsByKey.has(key)) {
+      auditsByKey.set(key, row);
+    }
+  }
+
+  return events.map((event) => {
+    const auditType = mapEventAuditType(event.type);
+    if (!auditType) return event;
+
+    const audit = auditsByKey.get(
+      makeAuditLookupKey({
+        type: auditType,
+        hackathonId: event.hackathonId,
+        submissionId: event.submissionId,
+        awardId: event.awardId,
+      }),
+    );
+
+    if (!audit) return event;
+
+    return {
+      ...event,
+      hcsTxId: audit.tx_id ?? null,
+      hcsTopicId: normalizeAuditTopicId(audit.topic_id),
+      hcsSequenceNumber: audit.sequence_number ?? null,
+    };
+  });
 }
 
 export async function claimNextJob(workerId: string): Promise<{ id: string; type: string; payload: Record<string, unknown> } | null> {

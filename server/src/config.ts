@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 
 loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../../.env") });
 
+const SRC_DIR = dirname(fileURLToPath(import.meta.url));
+
 export const PORT = Number(process.env.PORT || 3001);
 export const DATABASE_URL =
   process.env.DATABASE_URL?.trim() || "postgres://postgres:postgres@127.0.0.1:5432/judgebuddy";
@@ -25,6 +27,11 @@ export const HEDERA_EVM_RPC =
 export const HCS_TOPIC_ID = process.env.HCS_TOPIC_ID?.trim() || "";
 export const HEDERA_ACCOUNT_ID = process.env.HEDERA_ACCOUNT_ID?.trim() || "";
 export const HEDERA_PRIVATE_KEY = process.env.HEDERA_PRIVATE_KEY?.trim() || "";
+export const HEDERA_DRY_RUN =
+  process.env.HEDERA_DRY_RUN === "true" || process.env.HEDERA_DRY_RUN === "1";
+export const ESCROW_CONTRACT_ADDRESS = process.env.ESCROW_CONTRACT_ADDRESS?.trim() || "";
+export const TASK_STORE_PATH =
+  process.env.TASK_STORE_PATH?.trim() || resolve(SRC_DIR, "../data/tasks.json");
 export const TREASURY_CONTRACT_ADDRESS = process.env.TREASURY_CONTRACT_ADDRESS?.trim() || "";
 export const PRIZE_CLAIM_TOKEN_ADDRESS = process.env.PRIZE_CLAIM_TOKEN_ADDRESS?.trim() || "";
 export const TREASURY_RELAYER_PRIVATE_KEY = process.env.TREASURY_RELAYER_PRIVATE_KEY?.trim() || "";
