@@ -7,6 +7,12 @@
     "paths": {
       "@/*": [
         "./src/*"
+      ],
+      "@shared/*": [
+        "./packages/shared/src/*"
+      ],
+      "@ledger-clear-signing/*": [
+        "./packages/ledger-clear-signing/src/*"
       ]
     },
     "skipLibCheck": true,

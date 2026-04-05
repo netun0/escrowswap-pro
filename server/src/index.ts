@@ -1,99 +1,58 @@
-
-import fs from "node:fs";
-import { randomBytes, randomUUID } from "node:crypto";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { config as loadEnv } from "dotenv";
 import cors from "cors";
 import express from "express";
-import { dirname, resolve } from "node:path";
+import { randomBytes, randomUUID } from "node:crypto";
+import { getAddress, id, verifyMessage } from "ethers";
 import {
-  AccountId,
-  Client,
-  Hbar,
-  PrivateKey,
-  TokenId,
-  TransferTransaction,
-} from "@hashgraph/sdk";
-import { proto } from "@hiero-ledger/proto";
-import { PublicKey } from "@hiero-ledger/sdk";
-import Long from "long";
-import { AgentMode, HederaBuilder, HederaLangchainToolkit } from "hedera-agent-kit";
-import { Contract, JsonRpcProvider, getAddress, verifyMessage } from "ethers";
-import { HEDERA_TASK_ESCROW_ABI, EscrowOnChainStatus } from "./escrowAbi.js";
+  buildAuthSignedMessage,
+  buildAwardApprovalTypedData,
+  createHackathonRequestSchema,
+  createSubmissionRequestSchema,
+  fundHackathonRequestSchema,
+  approveAwardRequestSchema,
+  type AuthenticatedUser,
+  toOnchainId,
+} from "../../packages/shared/src/index.js";
+import {
+  HEDERA_EVM_RPC,
+  MIRROR_BASE,
+  NETWORK,
+  PORT,
+  PRIZE_CLAIM_TOKEN_ADDRESS,
+  SESSION_COOKIE_NAME,
+  TREASURY_CONTRACT_ADDRESS,
+} from "./config.js";
+import { ensureSchema } from "./db.js";
+import { appendHcsAudit } from "./hcs.js";
+import {
+  createApprovalRequest,
+  createHackathon,
+  createSubmission,
+  enqueueJob,
+  getApprovalRequestByAwardId,
+  getAwardProposal,
+  getHackathon,
+  getPrizeClaim,
+  getSubmission,
+  listApprovalRequests,
+  listEvents,
+  listHackathons,
+  listJobs,
+  listPrizeClaims,
+  listSubmissions,
+  markApprovalApproved,
+  markHackathonFunded,
+  recordEvent,
+  recordHcsAudit,
+  updateAwardProposal,
+  updateSubmissionStatus,
+  upsertPrizeClaim,
+} from "./store.js";
+import { getTreasuryWriteContract, treasuryInterface, treasuryProvider } from "./treasuryContract.js";
 
-// The server process runs from `/server`, but the shared env file lives at the repo root.
-loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../../.env") });
-
-/** Task shape aligned with the Vite app (`src/contracts/config`). Amount is smallest units (tinybars or token decimals). */
-type StoredTask = {
-  id: number;
-  client: string;
-  worker: string;
-  verifier: string;
-  verifierMode: "human" | "autonomous";
-  specURI: string;
-  outputURI: string;
-  paymentToken: string;
-  amount: string;
-  workerPreferredToken: string;
-  state:
-    | "Open"
-    | "Funded"
-    | "Submitted"
-    | "Verified"
-    | "PaidOut"
-    | "Refunded"
-    | "Disputed"
-    | "Expired"
-    | "EscrowRefundPending";
-  createdAt: number;
-  fundedAt: number;
-  submittedAt: number;
-  verifiedAt: number;
-  completedAt: number;
-  description: string;
-  deadline: number;
-  expiresAt: number;
-  maxBudget: number;
-  capabilities: string[];
-  ledgerTx?: Partial<{
-    created: string;
-    funded: string;
-    submitted: string;
-    rejected: string;
-    dispute: string;
-    settlement: string;
-    paidAudit: string;
-    onChainFund: string;
-    onChainRelease: string;
-    onChainRefund: string;
-  }>;
-  /** Set when `ESCROW_CONTRACT_ADDRESS` is configured at task creation (ERC-20 only). */
-  escrowContract?: boolean;
-  clientEvm?: string;
-  workerEvm?: string;
-  verifierEvm?: string;
-  tokenEvm?: string;
-  /** Verifier must sign matching tx on Hedera EVM, then call POST /tasks/:id/onchain-sync. */
-  escrowPendingAction?: "release" | "refund";
-};
-
-type LedgerSubmitResult = {
-  ok: boolean;
-  transactionId: string | null;
-  topicSequenceNumber: string | null;
-  reason?: "no_topic" | "dry_run_no_key" | "error";
-  error?: string;
-};
-
-type WalletSource = "hashpack" | "metamask";
-type SupportedNetwork = "testnet";
-
-type AuthenticatedUser = {
-  accountId: string;
-  walletSource: WalletSource;
-  network: SupportedNetwork;
+type StoredSession = {
+  token: string;
+  user: AuthenticatedUser;
+  expiresAtMs: number;
 };
 
 type AuthChallenge = AuthenticatedUser & {
@@ -105,211 +64,50 @@ type AuthChallenge = AuthenticatedUser & {
   used: boolean;
 };
 
-type StoredSession = {
-  token: string;
-  user: AuthenticatedUser;
-  expiresAtMs: number;
-};
-
-function mergeLedgerTx(task: StoredTask, key: keyof NonNullable<StoredTask["ledgerTx"]>, txId: string | null | undefined): void {
-  if (!txId) return;
-  if (!task.ledgerTx) task.ledgerTx = {};
-  task.ledgerTx[key] = txId;
-}
-
-const PORT = Number(process.env.PORT || 3001);
-const NETWORK = (process.env.HEDERA_NETWORK || "testnet").toLowerCase();
-const TOPIC_ID = (process.env.HCS_TOPIC_ID || "").trim();
-const OPERATOR_ID = (process.env.HEDERA_ACCOUNT_ID || "").trim();
-const OPERATOR_KEY_RAW = (process.env.HEDERA_PRIVATE_KEY || "").trim();
-const DRY_RUN = process.env.HEDERA_DRY_RUN === "true" || process.env.HEDERA_DRY_RUN === "1";
-const SESSION_COOKIE_NAME = "escrowswap_session";
 const AUTH_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const AUTH_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const ESCROW_CONTRACT_ADDRESS = (process.env.ESCROW_CONTRACT_ADDRESS || "").trim();
-const HEDERA_EVM_RPC = (
-  process.env.HEDERA_EVM_RPC ||
-  (NETWORK === "mainnet" ? "https://mainnet.hashio.io/api" : "https://testnet.hashio.io/api")
-).trim();
-const MIRROR_BASE = (
-  process.env.HEDERA_MIRROR_BASE ||
-  (NETWORK === "mainnet" ? "https://mainnet-public.mirrornode.hedera.com" : "https://testnet.mirrornode.hedera.com")
-).trim();
 
-const escrowDeploymentConfigured = Boolean(ESCROW_CONTRACT_ADDRESS && ESCROW_CONTRACT_ADDRESS.startsWith("0x"));
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-/** Writable task snapshot (default: `server/data/tasks.json`). */
-const STORE_PATH = process.env.TASK_STORE_PATH?.trim() || path.join(__dirname, "..", "data", "tasks.json");
-/** JudgeBuddy events when `VITE_HACKATHON_MOCKUP=false` (default: `server/data/hackathons.json`). */
-const HACKATHON_STORE_PATH =
-  process.env.HACKATHON_STORE_PATH?.trim() || path.join(__dirname, "..", "data", "hackathons.json");
-
-const tasks = new Map<number, StoredTask>();
 const authChallenges = new Map<string, AuthChallenge>();
 const authSessions = new Map<string, StoredSession>();
-let nextId = 0;
-
-function loadStore(): void {
-  try {
-    const raw = fs.readFileSync(STORE_PATH, "utf8");
-    const data = JSON.parse(raw) as { tasks?: StoredTask[]; nextId?: number };
-    if (!Array.isArray(data.tasks)) return;
-    tasks.clear();
-    let maxId = -1;
-    for (const t of data.tasks) {
-      tasks.set(t.id, t);
-      maxId = Math.max(maxId, t.id);
-    }
-    const storedNext = typeof data.nextId === "number" ? data.nextId : 0;
-    nextId = Math.max(storedNext, maxId + 1);
-    console.log(`Loaded ${tasks.size} task(s) from ${STORE_PATH}`);
-  } catch (e) {
-    const err = e as NodeJS.ErrnoException;
-    if (err.code !== "ENOENT") console.warn("task store load:", err.message);
-  }
-}
-
-function persistStore(): void {
-  try {
-    const dir = path.dirname(STORE_PATH);
-    fs.mkdirSync(dir, { recursive: true });
-    const payload = {
-      tasks: [...tasks.values()].sort((a, b) => a.id - b.id),
-      nextId,
-    };
-    fs.writeFileSync(STORE_PATH, JSON.stringify(payload, null, 2), "utf8");
-  } catch (e) {
-    console.error("task store persist failed:", e);
-  }
-}
-
-loadStore();
-
-const storedHackathons: Record<string, unknown>[] = [];
-
-function loadHackathonStore(): void {
-  try {
-    const raw = fs.readFileSync(HACKATHON_STORE_PATH, "utf8");
-    const data = JSON.parse(raw) as { hackathons?: unknown[] };
-    storedHackathons.length = 0;
-    if (Array.isArray(data.hackathons)) {
-      for (const h of data.hackathons) {
-        if (h && typeof h === "object") storedHackathons.push(h as Record<string, unknown>);
-      }
-    }
-    console.log(`Loaded ${storedHackathons.length} hackathon(s) from ${HACKATHON_STORE_PATH}`);
-  } catch (e) {
-    const err = e as NodeJS.ErrnoException;
-    if (err.code !== "ENOENT") console.warn("hackathon store load:", err.message);
-  }
-}
-
-function persistHackathonStore(): void {
-  try {
-    const dir = path.dirname(HACKATHON_STORE_PATH);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
-      HACKATHON_STORE_PATH,
-      JSON.stringify({ hackathons: storedHackathons }, null, 2),
-      "utf8",
-    );
-  } catch (e) {
-    console.error("hackathon store persist failed:", e);
-  }
-}
-
-loadHackathonStore();
-
-function hederaAccountRegex(id: string): boolean {
-  return /^\d+\.\d+\.\d+$/.test(id);
-}
-
-function sameAccount(a: string, b: string): boolean {
-  return a.trim() === b.trim();
-}
-
-function isWalletSource(value: unknown): value is WalletSource {
-  return value === "hashpack" || value === "metamask";
-}
-
-function isSupportedNetwork(value: unknown): value is SupportedNetwork {
-  return value === "testnet";
-}
-
-function buildAuthSignedMessage(challenge: AuthChallenge): string {
-  return [
-    "EscrowSwap Pro sign-in",
-    "",
-    `Account: ${challenge.accountId}`,
-    `Wallet: ${challenge.walletSource}`,
-    `Network: ${challenge.network}`,
-    `Challenge ID: ${challenge.challengeId}`,
-    `Nonce: ${challenge.nonce}`,
-    `Issued At: ${challenge.issuedAt}`,
-    `Expires At: ${challenge.expiresAt}`,
-    "",
-    "Only sign this message if you are connecting to EscrowSwap Pro.",
-  ].join("\n");
-}
-
-function readErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function prefixHederaSignedMessage(message: string): string {
-  return `\x19Hedera Signed Message:\n${message.length}${message}`;
-}
-
-function verifyHederaSignedMessage(message: string, base64SignatureMap: string, publicKey: PublicKey): boolean {
-  const signatureMap = proto.SignatureMap.decode(Buffer.from(base64SignatureMap, "base64"));
-  const signaturePair = signatureMap.sigPair?.[0];
-  const signature = signaturePair?.ed25519 ?? signaturePair?.ECDSASecp256k1;
-  if (!signature) {
-    throw new Error("Signature not found in signature map");
-  }
-
-  return publicKey.verify(Buffer.from(prefixHederaSignedMessage(message)), signature);
-}
 
 function cleanupExpiredAuthState(): void {
   const now = Date.now();
-
   for (const [id, challenge] of authChallenges.entries()) {
-    if (challenge.used || challenge.expiresAtMs <= now) {
-      authChallenges.delete(id);
-    }
+    if (challenge.expiresAtMs <= now || challenge.used) authChallenges.delete(id);
   }
-
   for (const [token, session] of authSessions.entries()) {
-    if (session.expiresAtMs <= now) {
-      authSessions.delete(token);
-    }
+    if (session.expiresAtMs <= now) authSessions.delete(token);
   }
 }
 
 function parseCookieHeader(header: string | undefined): Record<string, string> {
-  if (!header) return {};
-
-  return header.split(";").reduce<Record<string, string>>((acc, part) => {
-    const [rawKey, ...rest] = part.trim().split("=");
-    if (!rawKey || rest.length === 0) return acc;
-    acc[rawKey] = decodeURIComponent(rest.join("="));
-    return acc;
-  }, {});
+  return String(header || "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reduce<Record<string, string>>((acc, part) => {
+      const eq = part.indexOf("=");
+      if (eq === -1) return acc;
+      acc[part.slice(0, eq)] = decodeURIComponent(part.slice(eq + 1));
+      return acc;
+    }, {});
 }
 
 function setSessionCookie(res: express.Response, token: string, expiresAtMs: number): void {
-  const maxAgeSeconds = Math.max(0, Math.floor((expiresAtMs - Date.now()) / 1000));
-  const attrs = ["Path=/", "HttpOnly", "SameSite=Lax", `Max-Age=${maxAgeSeconds}`];
-  if (process.env.NODE_ENV === "production") attrs.push("Secure");
+  const attrs = [
+    "Path=/",
+    `Expires=${new Date(expiresAtMs).toUTCString()}`,
+    "HttpOnly",
+    "SameSite=Lax",
+  ];
   res.setHeader("Set-Cookie", `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; ${attrs.join("; ")}`);
 }
 
 function clearSessionCookie(res: express.Response): void {
-  const attrs = ["Path=/", "HttpOnly", "SameSite=Lax", "Max-Age=0"];
-  if (process.env.NODE_ENV === "production") attrs.push("Secure");
-  res.setHeader("Set-Cookie", `${SESSION_COOKIE_NAME}=; ${attrs.join("; ")}`);
+  res.setHeader(
+    "Set-Cookie",
+    `${SESSION_COOKIE_NAME}=; Path=/; Expires=${new Date(0).toUTCString()}; HttpOnly; SameSite=Lax`,
+  );
 }
 
 function getSessionFromRequest(req: express.Request): StoredSession | null {
@@ -317,8 +115,7 @@ function getSessionFromRequest(req: express.Request): StoredSession | null {
   const token = parseCookieHeader(req.headers.cookie)[SESSION_COOKIE_NAME];
   if (!token) return null;
   const session = authSessions.get(token);
-  if (!session) return null;
-  if (session.expiresAtMs <= Date.now()) {
+  if (!session || session.expiresAtMs <= Date.now()) {
     authSessions.delete(token);
     return null;
   }
@@ -328,113 +125,17 @@ function getSessionFromRequest(req: express.Request): StoredSession | null {
 function requireAuthSession(req: express.Request, res: express.Response): StoredSession | null {
   const session = getSessionFromRequest(req);
   if (!session) {
-    res.status(401).json({ error: "Sign in with HashPack or MetaMask first." });
+    res.status(401).json({ error: "Sign in with MetaMask first." });
     return null;
   }
   return session;
 }
 
-function requireTaskRole(
-  req: express.Request,
-  res: express.Response,
-  task: StoredTask,
-  roles: ("client" | "worker" | "verifier")[],
-): StoredSession | null {
-  const session = requireAuthSession(req, res);
-  if (!session) return null;
-
-  const authorized = roles.some((role) => sameAccount(task[role], session.user.accountId));
-  if (!authorized) {
-    res.status(403).json({ error: "Your signed-in Hedera account is not authorized for this task action." });
-    return null;
-  }
-
-  return session;
+function sameAccount(a: string, b: string): boolean {
+  return a.trim() === b.trim();
 }
 
-function mirrorNodeBaseUrl(network: SupportedNetwork): string {
-  return network === "testnet" ? "https://testnet.mirrornode.hedera.com" : "https://mainnet.mirrornode.hedera.com";
-}
-
-async function fetchAccountPublicKey(accountId: string, network: SupportedNetwork): Promise<PublicKey> {
-  const response = await fetch(`${mirrorNodeBaseUrl(network)}/api/v1/accounts/${accountId}`);
-  if (!response.ok) {
-    throw new Error(`Unable to fetch Hedera account key for ${accountId}.`);
-  }
-
-  const payload = (await response.json()) as {
-    key?: {
-      _type?: string;
-      key?: string;
-    };
-  };
-
-  const rawKey = payload.key?.key?.trim();
-  const rawType = payload.key?._type?.trim();
-  if (!rawKey || !rawType) {
-    throw new Error("Hedera account key is not available from the mirror node.");
-  }
-
-  if (rawType === "ED25519") {
-    return PublicKey.fromStringED25519(rawKey);
-  }
-  if (rawType === "ECDSA_SECP256K1") {
-    return PublicKey.fromStringECDSA(rawKey);
-  }
-
-  throw new Error(`Unsupported Hedera account key type: ${rawType}`);
-}
-
-function normalizeToken(t: string): string {
-  const s = t.trim();
-  if (!s) return "HBAR";
-  if (s.toUpperCase() === "HBAR") return "HBAR";
-  return s;
-}
-
-function hexToChecksumAddr(hex: string): string {
-  const h = hex.startsWith("0x") ? hex : `0x${hex}`;
-  return getAddress(h);
-}
-
-async function mirrorAccountEvm(accountId: string): Promise<string | null> {
-  try {
-    const r = await fetch(`${MIRROR_BASE}/api/v1/accounts/${accountId}`);
-    if (!r.ok) return null;
-    const j = (await r.json()) as { evm_address?: string | null };
-    const raw = j.evm_address?.trim();
-    if (!raw) return null;
-    return getAddress(raw);
-  } catch {
-    return null;
-  }
-}
-
-/** HTS ERC-20 `token()` address on Hedera EVM (long zero) when mirror omits `evm_address`. */
-function htsTokenToEvmAddress(tokenId: string): string | null {
-  try {
-    const raw = TokenId.fromString(tokenId).toEvmAddress();
-    return hexToChecksumAddr(raw);
-  } catch {
-    return null;
-  }
-}
-
-async function mirrorTokenEvm(tokenId: string): Promise<string | null> {
-  try {
-    const r = await fetch(`${MIRROR_BASE}/api/v1/tokens/${tokenId}`);
-    if (r.ok) {
-      const j = (await r.json()) as { evm_address?: string | null };
-      const raw = j.evm_address?.trim();
-      if (raw) return getAddress(raw);
-    }
-  } catch {
-    /* use HTS fallback */
-  }
-  return htsTokenToEvmAddress(tokenId);
-}
-
-function addrEq(a: string, b: string): boolean {
+function sameAddress(a: string, b: string): boolean {
   try {
     return getAddress(a) === getAddress(b);
   } catch {
@@ -442,184 +143,72 @@ function addrEq(a: string, b: string): boolean {
   }
 }
 
-function buildClient(): Client {
-  const net = NETWORK as "testnet" | "mainnet" | "previewnet";
-  if (!["testnet", "mainnet", "previewnet"].includes(net)) {
-    throw new Error(`HEDERA_NETWORK must be testnet, mainnet, or previewnet (got ${NETWORK})`);
-  }
-  const client = Client.forName(net);
-  if (!OPERATOR_ID || !OPERATOR_KEY_RAW) {
-    if (!DRY_RUN) {
-      throw new Error("HEDERA_ACCOUNT_ID and HEDERA_PRIVATE_KEY are required unless HEDERA_DRY_RUN=true");
-    }
-    return client;
-  }
-  const key = PrivateKey.fromString(OPERATOR_KEY_RAW);
-  client.setOperator(AccountId.fromString(OPERATOR_ID), key);
-  return client;
+async function mirrorAccountEvm(accountId: string): Promise<string | null> {
+  const response = await fetch(`${MIRROR_BASE}/api/v1/accounts/${accountId}`);
+  if (!response.ok) return null;
+  const payload = (await response.json()) as { evm_address?: string | null };
+  return payload.evm_address ? getAddress(payload.evm_address) : null;
 }
 
-let client: Client;
-try {
-  client = buildClient();
-} catch (e) {
-  console.warn("Hedera client init:", (e as Error).message);
-  client = Client.forName("testnet");
+async function appendAudit(type: string, payload: Record<string, unknown>) {
+  const hcs = await appendHcsAudit({ type, ...payload });
+  await recordHcsAudit({
+    type,
+    hackathonId: typeof payload.hackathonId === "string" ? payload.hackathonId : null,
+    submissionId: typeof payload.submissionId === "string" ? payload.submissionId : null,
+    awardId: typeof payload.awardId === "string" ? payload.awardId : null,
+    txId: hcs.txId,
+    topicId: hcs.ok ? "configured" : null,
+    sequenceNumber: hcs.sequenceNumber,
+    payload,
+  });
 }
 
-const toolkit =
-  OPERATOR_ID && OPERATOR_KEY_RAW
-    ? new HederaLangchainToolkit({
-        client,
-        configuration: {
-          context: { accountId: OPERATOR_ID, mode: AgentMode.AUTONOMOUS },
-        },
-      })
-    : null;
-
-if (toolkit) {
-  console.log(`hedera-agent-kit: ${toolkit.getTools().length} core tools available (REST uses SDK directly).`);
-}
-
-if (!TOPIC_ID) {
-  console.warn(
-    "[ledger] HCS_TOPIC_ID is not set — create / fund / submit will not write TopicMessageSubmitTransaction. Set a topic id for visible audit txs on HashScan.",
-  );
-}
-if (DRY_RUN) {
-  console.warn("[ledger] HEDERA_DRY_RUN=true — transfers and HCS submits are skipped (no paid transactions).");
-}
-if (!OPERATOR_KEY_RAW || !OPERATOR_ID) {
-  console.warn("[ledger] Operator key/account missing — Hedera transactions are disabled until .env is configured.");
-}
-if (escrowDeploymentConfigured) {
-  console.log(`[escrow] HederaTaskEscrow at ${ESCROW_CONTRACT_ADDRESS} (EVM RPC ${HEDERA_EVM_RPC}). New tasks use on-chain ERC-20 escrow; POST /fund and operator payout on approve are disabled.`);
-}
-
-async function appendHcs(event: Record<string, unknown>): Promise<LedgerSubmitResult> {
-  const label = String(event.type ?? "event");
-  if (!TOPIC_ID) {
-    console.warn(`[ledger] skip HCS (${label}): set HCS_TOPIC_ID`);
-    return { ok: false, transactionId: null, topicSequenceNumber: null, reason: "no_topic" };
-  }
-  if (DRY_RUN || !OPERATOR_KEY_RAW) {
-    console.warn(`[ledger] skip HCS (${label}): DRY_RUN or missing HEDERA_PRIVATE_KEY`);
-    return { ok: false, transactionId: null, topicSequenceNumber: null, reason: "dry_run_no_key" };
-  }
-  try {
-    const tx = HederaBuilder.submitTopicMessage({
-      topicId: TOPIC_ID,
-      message: JSON.stringify(event),
-      transactionMemo: label.slice(0, 100),
-    });
-    const res = await tx.execute(client);
-    const receipt = await res.getReceipt(client);
-    const txId = res.transactionId.toString();
-    const seq = receipt.topicSequenceNumber?.toString() ?? null;
-    console.log(`[ledger] HCS ok ${label} | tx=${txId} | topicSeq=${seq ?? "?"}`);
-    return { ok: true, transactionId: txId, topicSequenceNumber: seq };
-  } catch (e) {
-    const msg = (e as Error).message;
-    console.error(`[ledger] HCS failed (${label}):`, msg);
-    return { ok: false, transactionId: null, topicSequenceNumber: null, reason: "error", error: msg };
-  }
-}
-
-async function settleHbar(task: StoredTask): Promise<string> {
-  const worker = AccountId.fromString(task.worker);
-  const operator = AccountId.fromString(OPERATOR_ID);
-  const tiny = Long.fromString(task.amount);
-  const tx = await new TransferTransaction()
-    .addHbarTransfer(worker, Hbar.fromTinybars(tiny))
-    .addHbarTransfer(operator, Hbar.fromTinybars(tiny.negate()))
-    .execute(client);
-  await tx.getReceipt(client);
-  return tx.transactionId.toString();
-}
-
-async function settleHts(task: StoredTask): Promise<string> {
-  const worker = AccountId.fromString(task.worker);
-  const operator = AccountId.fromString(OPERATOR_ID);
-  const tokenId = TokenId.fromString(task.paymentToken);
-  const amt = Long.fromString(task.amount).negate();
-  const pos = Long.fromString(task.amount);
-  const tx = await new TransferTransaction()
-    .addTokenTransfer(tokenId, operator, amt)
-    .addTokenTransfer(tokenId, worker, pos)
-    .execute(client);
-  await tx.getReceipt(client);
-  return tx.transactionId.toString();
-}
-
-async function settleToWorker(task: StoredTask): Promise<string> {
-  if (DRY_RUN || !OPERATOR_KEY_RAW) {
-    return `dry-run-${Date.now()}`;
-  }
-  const pay = normalizeToken(task.paymentToken);
-  if (pay === "HBAR") {
-    return settleHbar(task);
-  }
-  return settleHts(task);
-}
-
-function serializeTask(t: StoredTask): Record<string, unknown> {
-  return { ...t };
+function readError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
-app.get("/health", (_req, res) => {
+app.get("/health", async (_req, res) => {
   res.json({
     ok: true,
     network: NETWORK,
-    operatorConfigured: Boolean(OPERATOR_ID && OPERATOR_KEY_RAW),
-    hcsTopic: TOPIC_ID || null,
-    dryRun: DRY_RUN,
-    escrowContractAddress: escrowDeploymentConfigured ? ESCROW_CONTRACT_ADDRESS : null,
+    mirrorBase: MIRROR_BASE,
     hederaEvmRpc: HEDERA_EVM_RPC,
-    hackathonStorePath: HACKATHON_STORE_PATH,
-    ledgerHints: {
-      hcsMessagesNeedTopic: !TOPIC_ID,
-      transfersNeedKeysAndNotDryRun: DRY_RUN || !OPERATOR_KEY_RAW,
-      settlementOnApprove: !(DRY_RUN || !OPERATOR_KEY_RAW || escrowDeploymentConfigured),
-    },
+    treasuryContractConfigured: Boolean(TREASURY_CONTRACT_ADDRESS),
+    prizeClaimTokenConfigured: Boolean(PRIZE_CLAIM_TOKEN_ADDRESS),
   });
 });
 
-app.post("/auth/nonce", (req, res) => {
+app.post("/auth/nonce", async (req, res) => {
   cleanupExpiredAuthState();
+  const accountId = String(req.body?.accountId ?? "").trim();
+  const evmAddress = String(req.body?.evmAddress ?? "").trim();
+  if (!/^\d+\.\d+\.\d+$/.test(accountId)) return res.status(400).json({ error: "accountId must be 0.0.x" });
+  if (!/^0x[a-fA-F0-9]{40}$/.test(evmAddress)) return res.status(400).json({ error: "evmAddress is required" });
 
-  const accountId = String((req.body as { accountId?: unknown })?.accountId ?? "").trim();
-  const walletSource = (req.body as { walletSource?: unknown })?.walletSource;
-  const network = (req.body as { network?: unknown })?.network;
-
-  if (!hederaAccountRegex(accountId)) {
-    return res.status(400).json({ error: "accountId must be a Hedera account id (0.0.x)" });
-  }
-  if (!isWalletSource(walletSource)) {
-    return res.status(400).json({ error: "walletSource must be hashpack or metamask" });
-  }
-  if (!isSupportedNetwork(network)) {
-    return res.status(400).json({ error: "network must be testnet" });
+  const expected = await mirrorAccountEvm(accountId);
+  if (!expected || !sameAddress(expected, evmAddress)) {
+    return res.status(400).json({ error: "MetaMask EVM address does not match the Hedera account mirror record." });
   }
 
   const now = Date.now();
   const challenge: AuthChallenge = {
     accountId,
+    evmAddress: getAddress(evmAddress),
+    walletSource: "metamask",
+    network: "testnet",
     challengeId: randomUUID(),
+    nonce: randomBytes(16).toString("hex"),
+    issuedAt: new Date(now).toISOString(),
     expiresAt: new Date(now + AUTH_CHALLENGE_TTL_MS).toISOString(),
     expiresAtMs: now + AUTH_CHALLENGE_TTL_MS,
-    issuedAt: new Date(now).toISOString(),
-    network,
-    nonce: randomBytes(16).toString("hex"),
     used: false,
-    walletSource,
   };
-
   authChallenges.set(challenge.challengeId, challenge);
-
   res.status(201).json({
     challengeId: challenge.challengeId,
     nonce: challenge.nonce,
@@ -630,38 +219,20 @@ app.post("/auth/nonce", (req, res) => {
 
 app.post("/auth/verify", async (req, res) => {
   cleanupExpiredAuthState();
-
-  const challengeId = String((req.body as { challengeId?: unknown })?.challengeId ?? "").trim();
-  const accountId = String((req.body as { accountId?: unknown })?.accountId ?? "").trim();
-  const walletSource = (req.body as { walletSource?: unknown })?.walletSource;
-  const network = (req.body as { network?: unknown })?.network;
-  const signature = String((req.body as { signature?: unknown })?.signature ?? "").trim();
-  const signedPayload = String((req.body as { signedPayload?: unknown })?.signedPayload ?? "");
-
-  if (!challengeId || !signature || !signedPayload) {
-    return res.status(400).json({ error: "challengeId, signature, and signedPayload are required" });
-  }
-  if (!hederaAccountRegex(accountId)) {
-    return res.status(400).json({ error: "accountId must be a Hedera account id (0.0.x)" });
-  }
-  if (!isWalletSource(walletSource)) {
-    return res.status(400).json({ error: "walletSource must be hashpack or metamask" });
-  }
-  if (!isSupportedNetwork(network)) {
-    return res.status(400).json({ error: "network must be testnet" });
-  }
-
+  const challengeId = String(req.body?.challengeId ?? "").trim();
+  const accountId = String(req.body?.accountId ?? "").trim();
+  const evmAddress = String(req.body?.evmAddress ?? "").trim();
+  const signature = String(req.body?.signature ?? "").trim();
+  const signedPayload = String(req.body?.signedPayload ?? "");
   const challenge = authChallenges.get(challengeId);
-  if (!challenge || challenge.used) {
-    return res.status(400).json({ error: "Challenge is missing or already used." });
+
+  if (!challenge || challenge.used) return res.status(400).json({ error: "Challenge missing or already used." });
+  if (!sameAccount(challenge.accountId, accountId) || !sameAddress(challenge.evmAddress, evmAddress)) {
+    return res.status(400).json({ error: "Challenge does not match the provided account." });
   }
   if (challenge.expiresAtMs <= Date.now()) {
     authChallenges.delete(challengeId);
-    return res.status(400).json({ error: "Challenge expired. Request a fresh sign-in challenge." });
-  }
-  if (!sameAccount(challenge.accountId, accountId) || challenge.walletSource !== walletSource || challenge.network !== network) {
-    authChallenges.delete(challengeId);
-    return res.status(400).json({ error: "Challenge does not match the provided account or wallet details." });
+    return res.status(400).json({ error: "Challenge expired." });
   }
 
   const expectedPayload = buildAuthSignedMessage(challenge);
@@ -670,518 +241,413 @@ app.post("/auth/verify", async (req, res) => {
     return res.status(400).json({ error: "Signed payload mismatch." });
   }
 
-  challenge.used = true;
-  authChallenges.set(challengeId, challenge);
-
-  try {
-    if (walletSource === "hashpack") {
-      const publicKey = await fetchAccountPublicKey(accountId, network);
-      const valid = verifyHederaSignedMessage(expectedPayload, signature, publicKey);
-      if (!valid) {
-        authChallenges.delete(challengeId);
-        return res.status(401).json({ error: "Signature verification failed." });
-      }
-    } else {
-      const expectedEvm = await mirrorAccountEvm(accountId);
-      if (!expectedEvm) {
-        authChallenges.delete(challengeId);
-        return res.status(400).json({
-          error: "This Hedera account has no mirror evm_address. Use an ECDSA account with an EVM alias.",
-        });
-      }
-      let recovered: string;
-      try {
-        recovered = verifyMessage(expectedPayload, signature);
-      } catch {
-        authChallenges.delete(challengeId);
-        return res.status(401).json({ error: "Invalid EVM signature." });
-      }
-      if (!addrEq(recovered, expectedEvm)) {
-        authChallenges.delete(challengeId);
-        return res.status(401).json({ error: "Wallet EVM address does not match this Hedera account." });
-      }
-    }
-
-    const user: AuthenticatedUser = { accountId, walletSource, network };
-    const token = randomBytes(32).toString("hex");
-    const expiresAtMs = Date.now() + AUTH_SESSION_TTL_MS;
-    authSessions.set(token, { token, user, expiresAtMs });
+  const recovered = verifyMessage(signedPayload, signature);
+  if (!sameAddress(recovered, evmAddress)) {
     authChallenges.delete(challengeId);
-    setSessionCookie(res, token, expiresAtMs);
-
-    return res.json({
-      user,
-      expiresAt: new Date(expiresAtMs).toISOString(),
-    });
-  } catch (error) {
-    authChallenges.delete(challengeId);
-    console.error("auth verify failed", error);
-    return res.status(502).json({ error: readErrorMessage(error) });
+    return res.status(401).json({ error: "Signature recovery failed." });
   }
+
+  challenge.used = true;
+  const token = randomBytes(32).toString("hex");
+  const expiresAtMs = Date.now() + AUTH_SESSION_TTL_MS;
+  authSessions.set(token, { token, user: challenge, expiresAtMs });
+  setSessionCookie(res, token, expiresAtMs);
+
+  res.json({
+    user: challenge,
+    expiresAt: new Date(expiresAtMs).toISOString(),
+  });
 });
 
 app.get("/auth/session", (req, res) => {
   const session = getSessionFromRequest(req);
-  if (!session) {
-    clearSessionCookie(res);
-    return res.json({ authenticated: false });
-  }
-
-  return res.json({
-    authenticated: true,
-    user: session.user,
-  });
+  if (!session) return res.json({ authenticated: false });
+  res.json({ authenticated: true, user: session.user });
 });
 
 app.post("/auth/logout", (req, res) => {
   const token = parseCookieHeader(req.headers.cookie)[SESSION_COOKIE_NAME];
-  if (token) {
-    authSessions.delete(token);
-  }
+  if (token) authSessions.delete(token);
   clearSessionCookie(res);
   res.status(204).end();
 });
 
-app.get("/hackathons", (_req, res) => {
-  res.json([...storedHackathons]);
+app.get("/hackathons", async (_req, res) => {
+  res.json(await listHackathons());
 });
 
-app.post("/hackathons", (req, res) => {
-  const body = req.body as Record<string, unknown> | null;
-  if (!body || typeof body !== "object") {
-    return res.status(400).json({ error: "JSON body required" });
-  }
-  const id = String(body.id ?? "").trim();
-  const name = String(body.name ?? "").trim();
-  if (!id || !name) {
-    return res.status(400).json({ error: "id and name are required" });
-  }
-  if (!Array.isArray(body.tracks) || body.tracks.length === 0) {
-    return res.status(400).json({ error: "tracks must be a non-empty array" });
-  }
-  if (storedHackathons.some((h) => String(h.id ?? "") === id)) {
-    return res.status(409).json({ error: "A hackathon with this id already exists" });
-  }
-  storedHackathons.push(body);
-  persistHackathonStore();
-  res.status(201).json(body);
+app.get("/hackathons/:id", async (req, res) => {
+  const hackathon = await getHackathon(req.params.id);
+  if (!hackathon) return res.status(404).json({ error: "Hackathon not found" });
+  const submissions = await listSubmissions(req.params.id);
+  const approvals = await listApprovalRequests(req.params.id);
+  const claims = await listPrizeClaims(req.params.id);
+  res.json({ ...hackathon, submissions, approvals, claims });
 });
 
-app.get("/tasks", (_req, res) => {
-  res.json([...tasks.values()].sort((a, b) => a.id - b.id).map(serializeTask));
-});
-
-app.get("/tasks/:id", (req, res) => {
-  const id = Number(req.params.id);
-  const t = tasks.get(id);
-  if (!t) return res.status(404).json({ error: "Task not found" });
-  res.json(serializeTask(t));
-});
-
-app.post("/tasks", async (req, res) => {
+app.post("/hackathons", async (req, res) => {
   const session = requireAuthSession(req, res);
   if (!session) return;
 
-  const {
-    worker,
-    verifier,
-    verifierMode = "human",
-    specURI = "",
-    description = "",
-    paymentToken,
-    amount,
-    workerPreferredToken,
-    deadlineUnix,
-    capabilities = [],
-    maxBudget = 10000,
-  } = req.body ?? {};
-
-  if (!worker || !verifier || !paymentToken || amount == null || !workerPreferredToken) {
-    return res.status(400).json({ error: "worker, verifier, paymentToken, amount, workerPreferredToken required" });
+  const parsed = createHackathonRequestSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!sameAccount(parsed.data.organizerAccountId, session.user.accountId)) {
+    return res.status(403).json({ error: "Signed-in organizer account must match organizerAccountId." });
   }
-  for (const label of ["worker", "verifier"] as const) {
-    const v = label === "worker" ? worker : verifier;
-    if (!hederaAccountRegex(String(v))) {
-      return res.status(400).json({ error: `${label} must be a Hedera account id (0.0.x)` });
-    }
-  }
-  const payTok = normalizeToken(String(paymentToken));
-  const prefTok = normalizeToken(String(workerPreferredToken));
-  if (payTok !== "HBAR" && !hederaAccountRegex(payTok)) {
-    return res.status(400).json({ error: "paymentToken must be HBAR or a token id 0.0.x" });
-  }
-  if (prefTok !== "HBAR" && !hederaAccountRegex(prefTok)) {
-    return res.status(400).json({ error: "workerPreferredToken must be HBAR or a token id 0.0.x" });
-  }
-  if (escrowDeploymentConfigured) {
-    if (payTok === "HBAR") {
-      return res.status(400).json({
-        error:
-          "On-chain escrow requires an HTS token id (ERC-20 on Hedera EVM), not HBAR. Unset ESCROW_CONTRACT_ADDRESS for legacy operator custody with HBAR.",
-      });
-    }
-    if (payTok !== prefTok) {
-      return res.status(400).json({ error: "Escrow contract mode requires paymentToken and workerPreferredToken to match." });
-    }
-  }
-  const amtStr = String(amount);
-  if (!/^\d+$/.test(amtStr) || BigInt(amtStr) <= 0n) {
-    return res.status(400).json({ error: "amount must be a positive integer string (tinybars or token smallest unit)" });
-  }
-  if (verifierMode !== "human" && verifierMode !== "autonomous") {
-    return res.status(400).json({ error: "verifierMode must be human or autonomous" });
+  if (!sameAddress(parsed.data.organizerEvmAddress, session.user.evmAddress)) {
+    return res.status(403).json({ error: "Signed-in organizer address must match organizerEvmAddress." });
   }
 
-  const now = Date.now() / 1000;
-  let deadlineSec = now + 86400 * 7;
-  let expiresAtSec = deadlineSec + 86400 * 7;
-  if (deadlineUnix != null && Number.isFinite(Number(deadlineUnix)) && Number(deadlineUnix) > now) {
-    deadlineSec = Math.floor(Number(deadlineUnix));
-    expiresAtSec = deadlineSec + 86400 * 7;
-  }
-
-  let escrowContract = false;
-  let clientEvm: string | undefined;
-  let workerEvm: string | undefined;
-  let verifierEvm: string | undefined;
-  let tokenEvm: string | undefined;
-  if (escrowDeploymentConfigured) {
-    const [ce, we, ve, te] = await Promise.all([
-      mirrorAccountEvm(String(session.user.accountId)),
-      mirrorAccountEvm(String(worker)),
-      mirrorAccountEvm(String(verifier)),
-      mirrorTokenEvm(payTok),
-    ]);
-    if (!ce || !we || !ve || !te) {
-      const missing: string[] = [];
-      if (!ce) missing.push("client");
-      if (!we) missing.push("worker");
-      if (!ve) missing.push("verifier");
-      if (!te) missing.push("token");
-      return res.status(400).json({
-        error:
-          "Could not resolve Hedera EVM address for all task participants. Accounts need a mirror `evm_address` (ECDSA / alias wallet). Tokens use mirror `evm_address` or the HTS long-zero address.",
-        missingEvmFor: missing,
-        mirrorBase: MIRROR_BASE,
-        hint:
-          "Use real testnet accounts in MetaMask/HashPack (not placeholder 0.0.1001). Ensure `HEDERA_NETWORK` / `HEDERA_MIRROR_BASE` match your accounts. Token id must exist on that network (e.g. USDC 0.0.429274 on testnet).",
-      });
-    }
-    escrowContract = true;
-    clientEvm = ce;
-    workerEvm = we;
-    verifierEvm = ve;
-    tokenEvm = te;
-  }
-
-  const id = nextId++;
-  const task: StoredTask = {
-    id,
-    client: session.user.accountId,
-    worker: String(worker),
-    verifier: String(verifier),
-    verifierMode,
-    specURI: String(specURI),
-    outputURI: "",
-    paymentToken: payTok,
-    amount: amtStr,
-    workerPreferredToken: prefTok,
-    state: "Open",
-    createdAt: now,
-    fundedAt: 0,
-    submittedAt: 0,
-    verifiedAt: 0,
-    completedAt: 0,
-    description: String(description) || String(specURI),
-    deadline: deadlineSec,
-    expiresAt: expiresAtSec,
-    maxBudget: Number(maxBudget) || 10000,
-    capabilities: Array.isArray(capabilities) ? capabilities.map(String) : [],
-    ...(escrowContract && clientEvm && workerEvm && verifierEvm && tokenEvm
-      ? { escrowContract: true, clientEvm, workerEvm, verifierEvm, tokenEvm }
-      : {}),
-  };
-  tasks.set(id, task);
-  persistStore();
-
-  const hcs = await appendHcs({ type: "created", taskId: id, at: now, task: serializeTask(task) });
-  if (hcs.ok && hcs.transactionId) {
-    mergeLedgerTx(task, "created", hcs.transactionId);
-    tasks.set(id, task);
-    persistStore();
-  }
-
-  res.status(201).json(serializeTask(task));
-});
-
-app.post("/tasks/:id/fund", async (req, res) => {
-  const id = Number(req.params.id);
-  const t = tasks.get(id);
-  if (!t) return res.status(404).json({ error: "Task not found" });
-  if (!requireTaskRole(req, res, t, ["client"])) return;
-  if (t.escrowContract) {
-    return res.status(409).json({
-      error:
-        "This task uses HederaTaskEscrow on-chain funding. Approve the token and call fundTask from the client EVM wallet, then POST /tasks/:id/onchain-sync.",
-      escrow: { contract: ESCROW_CONTRACT_ADDRESS, taskId: id },
-    });
-  }
-  if (t.state !== "Open") return res.status(400).json({ error: "Task not open" });
-
-  const now = Date.now() / 1000;
-  t.state = "Funded";
-  t.fundedAt = now;
-  tasks.set(id, t);
-  persistStore();
-
-  const hcs = await appendHcs({ type: "funded", taskId: id, at: now, note: (req.body as { note?: string })?.note });
-  if (hcs.ok && hcs.transactionId) {
-    mergeLedgerTx(t, "funded", hcs.transactionId);
-    tasks.set(id, t);
-    persistStore();
-  }
-  res.json({
-    task: serializeTask(t),
-    hcsSequence: hcs.topicSequenceNumber,
-    transactionId: hcs.transactionId,
+  const hackathon = await createHackathon(parsed.data);
+  await recordEvent({
+    scope: "hackathon",
+    source: "api",
+    type: "hackathon.created",
+    actor: session.user.accountId,
+    hackathonId: hackathon.id,
+    submissionId: null,
+    awardId: null,
+    claimId: null,
+    txHash: null,
+    payload: hackathon,
   });
+  await appendAudit("hackathon_created", { hackathonId: hackathon.id, organizer: session.user.accountId });
+  res.status(201).json(hackathon);
 });
 
-app.post("/tasks/:id/submit", async (req, res) => {
-  const id = Number(req.params.id);
-  const t = tasks.get(id);
-  if (!t) return res.status(404).json({ error: "Task not found" });
-  if (!requireTaskRole(req, res, t, ["worker"])) return;
-  if (t.state !== "Funded") return res.status(400).json({ error: "Task not funded" });
+app.post("/hackathons/:id/fund", async (req, res) => {
+  const session = requireAuthSession(req, res);
+  if (!session) return;
+  const parsed = fundHackathonRequestSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const outputURI = String((req.body as { outputURI?: string })?.outputURI || `ipfs://deliverable-${Date.now()}`);
-  const now = Date.now() / 1000;
-  t.state = "Submitted";
-  t.submittedAt = now;
-  t.outputURI = outputURI;
-  tasks.set(id, t);
-  persistStore();
-
-  const hcs = await appendHcs({ type: "submitted", taskId: id, at: now, outputURI });
-  if (hcs.ok && hcs.transactionId) {
-    mergeLedgerTx(t, "submitted", hcs.transactionId);
-    tasks.set(id, t);
-    persistStore();
+  const hackathon = await getHackathon(req.params.id);
+  if (!hackathon) return res.status(404).json({ error: "Hackathon not found" });
+  if (!sameAccount(hackathon.organizerAccountId, session.user.accountId)) {
+    return res.status(403).json({ error: "Only the organizer can confirm treasury funding." });
   }
-  res.json({ task: serializeTask(t), hcsSequence: hcs.topicSequenceNumber, transactionId: hcs.transactionId });
-});
+  if (!TREASURY_CONTRACT_ADDRESS) {
+    return res.status(503).json({ error: "TREASURY_CONTRACT_ADDRESS is not configured" });
+  }
 
-app.post("/tasks/:id/verify", async (req, res) => {
-  const id = Number(req.params.id);
-  const t = tasks.get(id);
-  if (!t) return res.status(404).json({ error: "Task not found" });
-  if (!requireTaskRole(req, res, t, ["verifier"])) return;
-  if (t.state !== "Submitted") return res.status(400).json({ error: "Task not awaiting verification" });
+  const receipt = await treasuryProvider.getTransactionReceipt(parsed.data.txHash);
+  if (!receipt) return res.status(404).json({ error: "Transaction receipt not found" });
 
-  const approved = Boolean((req.body as { approved?: boolean })?.approved);
-  const now = Date.now() / 1000;
+  const trackIdsByHash = new Map<string, string>();
+  for (const track of hackathon.tracks) {
+    trackIdsByHash.set(id(track.id), track.id);
+  }
+  const expectedHackathonId = id(hackathon.id);
+  const deposits: Array<{ trackId: string; amount: string }> = [];
+  let createdSeen = false;
 
-  if (!approved) {
-    if (t.escrowContract) {
-      t.state = "EscrowRefundPending";
-      t.escrowPendingAction = "refund";
-      t.verifiedAt = now;
-      tasks.set(id, t);
-      persistStore();
-      const hcs = await appendHcs({ type: "escrow_reject_pending_refund", taskId: id, at: now });
-      if (hcs.ok && hcs.transactionId) {
-        mergeLedgerTx(t, "rejected", hcs.transactionId);
-        tasks.set(id, t);
-        persistStore();
+  for (const log of receipt.logs) {
+    if (!sameAddress(log.address, TREASURY_CONTRACT_ADDRESS)) continue;
+    try {
+      const parsedLog = treasuryInterface.parseLog(log);
+      if (!parsedLog) continue;
+      if (parsedLog.name === "HackathonCreated" && parsedLog.args.hackathonId === expectedHackathonId) {
+        createdSeen = true;
       }
-      return res.json({
-        task: serializeTask(t),
-        hcsSequence: hcs.topicSequenceNumber,
-        transactionId: hcs.transactionId,
-        escrowNext: "sign_refund_then_sync",
-      });
+      if (parsedLog.name === "TreasuryFunded" && parsedLog.args.hackathonId === expectedHackathonId) {
+        const trackId = trackIdsByHash.get(parsedLog.args.trackId);
+        if (trackId) deposits.push({ trackId, amount: parsedLog.args.amount.toString() });
+      }
+    } catch {
+      // ignore unrelated logs
     }
-    t.state = "Refunded";
-    t.verifiedAt = now;
-    tasks.set(id, t);
-    persistStore();
-    const hcs = await appendHcs({ type: "rejected", taskId: id, at: now });
-    if (hcs.ok && hcs.transactionId) {
-      mergeLedgerTx(t, "rejected", hcs.transactionId);
-      tasks.set(id, t);
-      persistStore();
-    }
-    return res.json({ task: serializeTask(t), hcsSequence: hcs.topicSequenceNumber, transactionId: hcs.transactionId });
   }
 
-  if (t.escrowContract) {
-    t.state = "Verified";
-    t.escrowPendingAction = "release";
-    t.verifiedAt = now;
-    tasks.set(id, t);
-    persistStore();
-    const hcs = await appendHcs({ type: "escrow_approve_pending_release", taskId: id, at: now });
-    return res.json({
-      task: serializeTask(t),
-      hcsSequence: hcs.topicSequenceNumber,
-      transactionId: hcs.transactionId,
-      escrowNext: "sign_release_then_sync",
+  if (!createdSeen || deposits.length === 0) {
+    return res.status(409).json({ error: "Transaction does not contain the expected treasury bootstrap events." });
+  }
+
+  await markHackathonFunded({
+    hackathonId: hackathon.id,
+    txHash: parsed.data.txHash,
+    sponsorAccountId: session.user.accountId,
+    sponsorEvmAddress: session.user.evmAddress,
+    tokenId: hackathon.payoutTokenId,
+    deposits,
+  });
+  await recordEvent({
+    scope: "hackathon",
+    source: "chain",
+    type: "treasury.funded",
+    actor: session.user.accountId,
+    hackathonId: hackathon.id,
+    submissionId: null,
+    awardId: null,
+    claimId: null,
+    txHash: parsed.data.txHash,
+    payload: { deposits },
+  });
+  await appendAudit("treasury_funded", { hackathonId: hackathon.id, txHash: parsed.data.txHash, deposits });
+  res.json({ ok: true, txHash: parsed.data.txHash, deposits });
+});
+
+app.get("/submissions", async (req, res) => {
+  const hackathonId = String(req.query.h ?? "").trim();
+  if (!hackathonId) return res.status(400).json({ error: "h query param is required" });
+  res.json(await listSubmissions(hackathonId));
+});
+
+app.post("/submissions", async (req, res) => {
+  const parsed = createSubmissionRequestSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const submission = await createSubmission(parsed.data);
+  const jobId = await enqueueJob("evaluate_submission", { submissionId: submission.id });
+  await recordEvent({
+    scope: "submission",
+    source: "api",
+    type: "submission.created",
+    actor: parsed.data.teamName,
+    hackathonId: submission.hackathonId,
+    submissionId: submission.id,
+    awardId: null,
+    claimId: null,
+    txHash: null,
+    payload: { jobId },
+  });
+  await appendAudit("submission_created", { hackathonId: submission.hackathonId, submissionId: submission.id });
+  res.status(201).json({ submission, jobId });
+});
+
+app.get("/submissions/:id", async (req, res) => {
+  const submission = await getSubmission(req.params.id);
+  if (!submission) return res.status(404).json({ error: "Submission not found" });
+  res.json(submission);
+});
+
+app.post("/submissions/:id/evaluate", async (req, res) => {
+  const submission = await getSubmission(req.params.id);
+  if (!submission) return res.status(404).json({ error: "Submission not found" });
+  const jobId = await enqueueJob("evaluate_submission", { submissionId: submission.id, force: Boolean(req.body?.force) });
+  await recordEvent({
+    scope: "job",
+    source: "api",
+    type: "evaluation.queued",
+    actor: "api",
+    hackathonId: submission.hackathonId,
+    submissionId: submission.id,
+    awardId: null,
+    claimId: null,
+    txHash: null,
+    payload: { jobId },
+  });
+  res.status(202).json({ ok: true, jobId });
+});
+
+app.get("/approvals", async (req, res) => {
+  res.json(await listApprovalRequests(String(req.query.h ?? "").trim() || undefined));
+});
+
+app.post("/awards/:id/approve", async (req, res) => {
+  const session = requireAuthSession(req, res);
+  if (!session) return;
+  const parsed = approveAwardRequestSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const award = await getAwardProposal(req.params.id);
+  if (!award) return res.status(404).json({ error: "Award not found" });
+  const hackathon = await getHackathon(award.hackathonId);
+  if (!hackathon) return res.status(404).json({ error: "Hackathon not found" });
+  const approvalRequest = await getApprovalRequestByAwardId(award.id);
+  if (!approvalRequest) return res.status(404).json({ error: "Approval request not found" });
+
+  if (!sameAccount(hackathon.judgeAccountId, session.user.accountId) || !sameAddress(hackathon.judgeEvmAddress, session.user.evmAddress)) {
+    return res.status(403).json({ error: "Only the configured judge can approve this award." });
+  }
+
+  if (!TREASURY_CONTRACT_ADDRESS) {
+    return res.status(503).json({ error: "TREASURY_CONTRACT_ADDRESS is not configured" });
+  }
+
+  const typedData = buildAwardApprovalTypedData({
+    chainId: 296,
+    verifyingContract: TREASURY_CONTRACT_ADDRESS,
+    approval: {
+      awardId: toOnchainId(parsed.data.approval.awardId),
+      hackathonId: toOnchainId(parsed.data.approval.hackathonId),
+      submissionId: toOnchainId(parsed.data.approval.submissionId),
+      trackId: toOnchainId(parsed.data.approval.trackId),
+      winner: parsed.data.approval.winner,
+      amount: parsed.data.approval.amount,
+      settlementMode: parsed.data.approval.settlementMode,
+      expiresAt: parsed.data.approval.expiresAt,
+    },
+  });
+
+  if (approvalRequest.typedData.digest !== typedData.digest || award.digest !== typedData.digest) {
+    return res.status(409).json({ error: "Approval digest mismatch; the award proposal changed after the request was issued." });
+  }
+
+  const treasury = getTreasuryWriteContract();
+  const tx = await treasury.executeApprovedAward(
+    {
+      awardId: typedData.value.awardId,
+      hackathonId: typedData.value.hackathonId,
+      submissionId: typedData.value.submissionId,
+      trackId: typedData.value.trackId,
+      winner: typedData.value.winner,
+      amount: typedData.value.amount,
+      settlementMode: typedData.value.settlementMode,
+      expiresAt: typedData.value.expiresAt,
+    },
+    parsed.data.signature,
+  );
+  const receipt = await tx.wait();
+
+  let mintedSerial: string | null = null;
+  for (const log of receipt?.logs ?? []) {
+    if (!sameAddress(log.address, TREASURY_CONTRACT_ADDRESS)) continue;
+    try {
+      const parsedLog = treasuryInterface.parseLog(log);
+      if (!parsedLog) continue;
+      if (parsedLog.name === "ClaimMinted") {
+        mintedSerial = parsedLog.args.serialNumber.toString();
+      }
+    } catch {
+      // ignore unrelated logs
+    }
+  }
+
+  const nextStatus = parsed.data.approval.settlementMode === "claim_token" ? "claim_minted" : "paid_out";
+  await markApprovalApproved({ awardId: award.id, signature: parsed.data.signature, status: "executed" });
+  await updateAwardProposal({ id: award.id, status: nextStatus, txHash: receipt?.hash ?? tx.hash });
+  if (nextStatus === "paid_out") {
+    await updateSubmissionStatus(award.submissionId, "paid");
+  } else {
+    await upsertPrizeClaim({
+      awardId: award.id,
+      claimantAccountId: award.winnerAccountId,
+      claimantEvmAddress: award.winnerEvmAddress,
+      tokenAddress: PRIZE_CLAIM_TOKEN_ADDRESS || null,
+      serialNumber: mintedSerial,
+      metadataURI: `jb://claim/${award.id}`,
+      status: "minted",
+      mintedTxHash: receipt?.hash ?? tx.hash,
     });
   }
 
-  try {
-    const payTok = normalizeToken(t.paymentToken);
-    const prefTok = normalizeToken(t.workerPreferredToken);
-    if (payTok !== prefTok) {
-      return res.status(400).json({
-        error:
-          "Cross-token settlement is not implemented. Use the same paymentToken and workerPreferredToken (e.g. both HBAR).",
-      });
-    }
+  await recordEvent({
+    scope: "award",
+    source: "chain",
+    type: "award.approved",
+    actor: session.user.accountId,
+    hackathonId: award.hackathonId,
+    submissionId: award.submissionId,
+    awardId: award.id,
+    claimId: nextStatus === "claim_minted" ? award.id : null,
+    txHash: receipt?.hash ?? tx.hash,
+    payload: { settlementMode: parsed.data.approval.settlementMode, digest: typedData.digest },
+  });
+  await appendAudit("award_approved", {
+    hackathonId: award.hackathonId,
+    submissionId: award.submissionId,
+    awardId: award.id,
+    txHash: receipt?.hash ?? tx.hash,
+  });
+  res.json({ ok: true, txHash: receipt?.hash ?? tx.hash, status: nextStatus });
+});
 
-    const txId = await settleToWorker(t);
-    mergeLedgerTx(t, "settlement", txId);
-    t.state = "PaidOut";
-    t.verifiedAt = now;
-    t.completedAt = now;
-    tasks.set(id, t);
-    persistStore();
-    const hcs = await appendHcs({ type: "paid", taskId: id, at: now, settlementTxId: txId });
-    if (hcs.ok && hcs.transactionId) {
-      mergeLedgerTx(t, "paidAudit", hcs.transactionId);
-      tasks.set(id, t);
-      persistStore();
-    }
-    return res.json({
-      task: serializeTask(t),
-      settlementTxId: txId,
-      hcsSequence: hcs.topicSequenceNumber,
-      paidAuditTransactionId: hcs.transactionId,
+app.get("/claims", async (req, res) => {
+  res.json(await listPrizeClaims(String(req.query.h ?? "").trim() || undefined));
+});
+
+app.post("/claims/:id/redeem", async (req, res) => {
+  const session = requireAuthSession(req, res);
+  if (!session) return;
+  if (!TREASURY_CONTRACT_ADDRESS) {
+    return res.status(503).json({ error: "TREASURY_CONTRACT_ADDRESS is not configured" });
+  }
+  const claim = await getPrizeClaim(req.params.id);
+  if (!claim) return res.status(404).json({ error: "Claim not found" });
+  const award = await getAwardProposal(claim.awardId);
+  if (!award) return res.status(404).json({ error: "Award not found" });
+  if (!sameAccount(claim.claimantAccountId, session.user.accountId)) {
+    return res.status(403).json({ error: "Only the claimant can redeem this claim." });
+  }
+
+  const treasury = getTreasuryWriteContract();
+  const tx = await treasury.redeemClaim(id(claim.id));
+  const receipt = await tx.wait();
+
+  await upsertPrizeClaim({
+    awardId: claim.id,
+    claimantAccountId: claim.claimantAccountId,
+    claimantEvmAddress: claim.claimantEvmAddress,
+    tokenAddress: claim.tokenAddress,
+    serialNumber: claim.serialNumber,
+    metadataURI: claim.metadataURI,
+    status: "redeemed",
+    mintedTxHash: claim.mintedTxHash,
+    redeemedTxHash: receipt?.hash ?? tx.hash,
+  });
+  await updateAwardProposal({ id: award.id, status: "redeemed", txHash: receipt?.hash ?? tx.hash });
+  await updateSubmissionStatus(award.submissionId, "paid");
+  await recordEvent({
+    scope: "claim",
+    source: "chain",
+    type: "claim.redeemed",
+    actor: session.user.accountId,
+    hackathonId: award.hackathonId,
+    submissionId: award.submissionId,
+    awardId: award.id,
+    claimId: claim.id,
+    txHash: receipt?.hash ?? tx.hash,
+    payload: {},
+  });
+  await appendAudit("claim_redeemed", {
+    hackathonId: award.hackathonId,
+    submissionId: award.submissionId,
+    awardId: award.id,
+    txHash: receipt?.hash ?? tx.hash,
+  });
+  res.json({ ok: true, txHash: receipt?.hash ?? tx.hash });
+});
+
+app.get("/jobs", async (_req, res) => {
+  res.json(await listJobs());
+});
+
+app.get("/events", async (req, res) => {
+  res.json(
+    await listEvents({
+      hackathonId: String(req.query.h ?? "").trim() || undefined,
+      submissionId: String(req.query.s ?? "").trim() || undefined,
+      scope: (String(req.query.scope ?? "").trim() || undefined) as any,
+    }),
+  );
+});
+
+app.post("/events/naryo", async (req, res) => {
+  const items = Array.isArray(req.body?.events) ? req.body.events : Array.isArray(req.body) ? req.body : [req.body];
+  for (const item of items) {
+    await recordEvent({
+      scope: "system",
+      source: "naryo",
+      type: String(item?.eventName ?? item?.type ?? "naryo.event"),
+      actor: null,
+      hackathonId: typeof item?.hackathonId === "string" ? item.hackathonId : null,
+      submissionId: typeof item?.submissionId === "string" ? item.submissionId : null,
+      awardId: typeof item?.awardId === "string" ? item.awardId : null,
+      claimId: typeof item?.claimId === "string" ? item.claimId : null,
+      txHash: typeof item?.transactionHash === "string" ? item.transactionHash : null,
+      payload: item ?? {},
     });
-  } catch (e) {
-    console.error("settlement failed", e);
-    return res.status(500).json({ error: (e as Error).message || "Settlement failed" });
   }
+  res.status(202).json({ accepted: items.length });
 });
 
-app.post("/tasks/:id/dispute", async (req, res) => {
-  const id = Number(req.params.id);
-  const t = tasks.get(id);
-  if (!t) return res.status(404).json({ error: "Task not found" });
-  if (!requireTaskRole(req, res, t, ["client", "worker"])) return;
-  if (!["Funded", "Submitted"].includes(t.state)) {
-    return res.status(400).json({ error: "Task cannot be disputed in this state" });
-  }
-  t.state = "Disputed";
-  tasks.set(id, t);
-  persistStore();
-  const hcs = await appendHcs({ type: "dispute", taskId: id, at: Date.now() / 1000 });
-  if (hcs.ok && hcs.transactionId) {
-    mergeLedgerTx(t, "dispute", hcs.transactionId);
-    tasks.set(id, t);
-    persistStore();
-  }
-  res.json({ task: serializeTask(t), hcsSequence: hcs.topicSequenceNumber, transactionId: hcs.transactionId });
-});
+async function main() {
+  await ensureSchema();
+  app.listen(PORT, () => {
+    console.log(`JudgeBuddy API listening on http://localhost:${PORT}`);
+  });
+}
 
-app.post("/tasks/:id/onchain-sync", async (req, res) => {
-  const id = Number(req.params.id);
-  const t = tasks.get(id);
-  if (!t) return res.status(404).json({ error: "Task not found" });
-  if (!t.escrowContract) return res.status(400).json({ error: "Task is not an on-chain escrow task" });
-  if (!escrowDeploymentConfigured) {
-    return res.status(503).json({ error: "Server ESCROW_CONTRACT_ADDRESS is not set" });
-  }
-
-  const optionalTx = String((req.body as { txHash?: string })?.txHash || "").trim() || undefined;
-
-  try {
-    const provider = new JsonRpcProvider(HEDERA_EVM_RPC);
-    const c = new Contract(ESCROW_CONTRACT_ADDRESS, HEDERA_TASK_ESCROW_ABI, provider);
-    const raw = await c.tasks(BigInt(id));
-    const cClient = String(raw[0]);
-    const cWorker = String(raw[1]);
-    const cVerifier = String(raw[2]);
-    const cToken = String(raw[3]);
-    const cAmount = raw[4] as bigint;
-    const cStatus = Number(raw[5]);
-
-    if (!t.clientEvm || !t.workerEvm || !t.verifierEvm || !t.tokenEvm) {
-      return res.status(500).json({ error: "Task missing EVM participant addresses" });
-    }
-    if (!addrEq(cClient, t.clientEvm)) return res.status(409).json({ error: "On-chain client does not match task" });
-    if (!addrEq(cWorker, t.workerEvm)) return res.status(409).json({ error: "On-chain worker does not match task" });
-    if (!addrEq(cVerifier, t.verifierEvm)) return res.status(409).json({ error: "On-chain verifier does not match task" });
-    if (!addrEq(cToken, t.tokenEvm)) return res.status(409).json({ error: "On-chain token does not match task" });
-    if (cAmount.toString() !== t.amount) return res.status(409).json({ error: "On-chain amount does not match task" });
-
-    if (cStatus === EscrowOnChainStatus.None) {
-      return res.json({ task: serializeTask(t), onChain: { status: "none" as const } });
-    }
-
-    if (cStatus === EscrowOnChainStatus.Funded) {
-      if (t.state === "Open") {
-        const fundNow = Date.now() / 1000;
-        t.state = "Funded";
-        t.fundedAt = fundNow;
-        if (optionalTx) mergeLedgerTx(t, "onChainFund", optionalTx);
-        tasks.set(id, t);
-        persistStore();
-        const hcs = await appendHcs({ type: "onchain_funded", taskId: id, at: fundNow });
-        if (hcs.ok && hcs.transactionId) mergeLedgerTx(t, "funded", hcs.transactionId);
-        tasks.set(id, t);
-        persistStore();
-      }
-      return res.json({ task: serializeTask(t), onChain: { status: "funded" as const } });
-    }
-
-    if (cStatus === EscrowOnChainStatus.Released) {
-      const done = Date.now() / 1000;
-      if (t.state !== "PaidOut") {
-        t.state = "PaidOut";
-        t.completedAt = done;
-        if (!t.verifiedAt) t.verifiedAt = done;
-        delete t.escrowPendingAction;
-        if (optionalTx) {
-          mergeLedgerTx(t, "onChainRelease", optionalTx);
-          mergeLedgerTx(t, "settlement", optionalTx);
-        }
-        tasks.set(id, t);
-        persistStore();
-        const hcs = await appendHcs({ type: "onchain_released", taskId: id, at: done });
-        if (hcs.ok && hcs.transactionId) mergeLedgerTx(t, "paidAudit", hcs.transactionId);
-        tasks.set(id, t);
-        persistStore();
-      }
-      return res.json({ task: serializeTask(t), onChain: { status: "released" as const } });
-    }
-
-    if (cStatus === EscrowOnChainStatus.Refunded) {
-      const done = Date.now() / 1000;
-      if (t.state !== "Refunded") {
-        t.state = "Refunded";
-        if (!t.verifiedAt) t.verifiedAt = done;
-        delete t.escrowPendingAction;
-        if (optionalTx) mergeLedgerTx(t, "onChainRefund", optionalTx);
-        tasks.set(id, t);
-        persistStore();
-        const hcs = await appendHcs({ type: "onchain_refunded", taskId: id, at: done });
-        if (hcs.ok && hcs.transactionId) mergeLedgerTx(t, "rejected", hcs.transactionId);
-        tasks.set(id, t);
-        persistStore();
-      }
-      return res.json({ task: serializeTask(t), onChain: { status: "refunded" as const } });
-    }
-
-    return res.status(500).json({ error: "Unknown on-chain status" });
-  } catch (e) {
-    console.error("onchain-sync", e);
-    return res.status(502).json({ error: (e as Error).message || "RPC or contract read failed" });
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`Hedera escrow API listening on http://localhost:${PORT}`);
-  console.log(`Task store: ${STORE_PATH}`);
-  console.log(`Hackathon store: ${HACKATHON_STORE_PATH}`);
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
 });

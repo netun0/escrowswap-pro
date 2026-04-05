@@ -1,14 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { AppLayout } from "@/components/AppLayout";
-import Dashboard from "./pages/Dashboard";
-import CreateTask from "./pages/CreateTask";
-import TaskDetail from "./pages/TaskDetail";
-import MyTasks from "./pages/MyTasks";
-import AgentMonitor from "./pages/AgentMonitor";
 import NotFound from "./pages/NotFound";
 import { HackathonLayout } from "@/hackathon/HackathonLayout";
 import HackathonIndex from "@/hackathon/pages/HackathonIndex";
@@ -27,17 +21,17 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<AppLayout><Dashboard /></AppLayout>} />
-          <Route path="/create" element={<AppLayout><CreateTask /></AppLayout>} />
-          <Route path="/task/:id" element={<AppLayout><TaskDetail /></AppLayout>} />
-          <Route path="/tasks" element={<AppLayout><MyTasks /></AppLayout>} />
-          <Route path="/agents" element={<AppLayout><AgentMonitor /></AppLayout>} />
+          <Route path="/" element={<HackathonLayout><HackathonIndex /></HackathonLayout>} />
           <Route path="/hackathon" element={<HackathonLayout><HackathonIndex /></HackathonLayout>} />
           <Route path="/hackathon/live" element={<HackathonLayout><LiveEvent /></HackathonLayout>} />
           <Route path="/hackathon/submit" element={<HackathonLayout><SubmitProject /></HackathonLayout>} />
           <Route path="/hackathon/submissions" element={<HackathonLayout><Submissions /></HackathonLayout>} />
           <Route path="/hackathon/agents" element={<HackathonLayout><AgentPipeline /></HackathonLayout>} />
           <Route path="/hackathon/create" element={<HackathonLayout><CreateHackathon /></HackathonLayout>} />
+          <Route path="/create" element={<Navigate to="/hackathon/create" replace />} />
+          <Route path="/tasks" element={<Navigate to="/hackathon/submissions" replace />} />
+          <Route path="/agents" element={<Navigate to="/hackathon/agents" replace />} />
+          <Route path="/task/:id" element={<Navigate to="/hackathon/submissions" replace />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
