@@ -9,21 +9,18 @@
     "build": "tsc",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "engines": {
-    "node": "20.x"
-  },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
     "@hashgraph/hedera-wallet-connect": "^2.1.2",
+    "ethers": "^6.13.0",
     "@hashgraph/sdk": "^2.81.0",
     "@hiero-ledger/proto": "2.25.0",
     "@hiero-ledger/sdk": "2.79.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.0",
-    "ethers": "^6.13.0",
     "express": "^5.2.1",
     "hedera-agent-kit": "^3.8.2",
     "long": "^5.3.2"
@@ -31,9 +28,9 @@
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
-    "@types/node": "^20.17.30",
+    "@types/node": "^25.5.2",
     "tsx": "^4.21.0",
-    "typescript": "^5.6.3"
+    "typescript": "^6.0.2"
   },
   "overrides": {
     "@hashgraph/sdk": "$@hashgraph/sdk"
