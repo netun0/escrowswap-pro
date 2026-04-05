@@ -50,6 +50,24 @@ type QualityResult = {
 };
 
 type RepoSlug = { owner: string; repo: string };
+const HTTP_REQUEST_HEADERS = {
+  "User-Agent": "JudgeBuddy-Worker",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+};
+
+function emptyRepoEvidence(): RepoEvidence {
+  return {
+    publicRepo: false,
+    defaultBranch: null,
+    readmePresent: false,
+    topics: [],
+    rootFiles: [],
+    stars: 0,
+    forks: 0,
+    openIssues: 0,
+    language: null,
+  };
+}
 
 function parseGitHubRepo(url: string): RepoSlug | null {
   try {
@@ -64,29 +82,27 @@ function parseGitHubRepo(url: string): RepoSlug | null {
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url, {
-    headers: { "User-Agent": "JudgeBuddy-Worker" },
+    headers: HTTP_REQUEST_HEADERS,
   });
   if (!response.ok) throw new Error(`Request failed: ${response.status} ${url}`);
   return (await response.json()) as T;
 }
 
+function isReachableDemoResponse(status: number): boolean {
+  return (status >= 200 && status < 400) || status === 401 || status === 403 || status === 405 || status === 429;
+}
+
 async function collectRepoEvidence(githubUrl: string): Promise<RepoEvidence> {
   const slug = parseGitHubRepo(githubUrl);
-  if (!slug) {
-    return {
-      publicRepo: false,
-      defaultBranch: null,
-      readmePresent: false,
-      topics: [],
-      rootFiles: [],
-      stars: 0,
-      forks: 0,
-      openIssues: 0,
-      language: null,
-    };
+  if (!slug) return emptyRepoEvidence();
+
+  let repo: any;
+  try {
+    repo = await fetchJson<any>(`https://api.github.com/repos/${slug.owner}/${slug.repo}`);
+  } catch {
+    return emptyRepoEvidence();
   }
 
-  const repo = await fetchJson<any>(`https://api.github.com/repos/${slug.owner}/${slug.repo}`);
   let readmePresent = false;
   try {
     await fetchJson<any>(`https://api.github.com/repos/${slug.owner}/${slug.repo}/readme`);
@@ -118,14 +134,14 @@ async function collectRepoEvidence(githubUrl: string): Promise<RepoEvidence> {
 
 async function verifyDemo(url: string): Promise<boolean> {
   try {
-    const response = await fetch(url, { method: "HEAD", redirect: "follow" });
-    if (response.ok) return true;
+    const response = await fetch(url, { method: "HEAD", redirect: "follow", headers: HTTP_REQUEST_HEADERS });
+    if (isReachableDemoResponse(response.status)) return true;
   } catch {
     // Fallback to GET for servers that reject HEAD.
   }
   try {
-    const response = await fetch(url, { method: "GET", redirect: "follow" });
-    return response.ok;
+    const response = await fetch(url, { method: "GET", redirect: "follow", headers: HTTP_REQUEST_HEADERS });
+    return isReachableDemoResponse(response.status);
   } catch {
     return false;
   }

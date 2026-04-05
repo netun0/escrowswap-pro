@@ -8,6 +8,7 @@ import type {
   EventEnvelope,
   HackathonRecord,
   PrizeClaim,
+  SimilarityCluster,
   SubmissionRecord,
 } from "@shared/treasury";
 import { HEDERA_API_URL } from "@/contracts/env";
@@ -16,6 +17,7 @@ export type HackathonDetail = HackathonRecord & {
   submissions: SubmissionRecord[];
   approvals: ApprovalRequest[];
   claims: PrizeClaim[];
+  similarityClusters: SimilarityCluster[];
 };
 
 export type HealthResponse = {

@@ -258,6 +258,21 @@ export const hackathonRecordSchema = z.object({
 });
 export type HackathonRecord = z.infer<typeof hackathonRecordSchema>;
 
+export const similarityClusterSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  theme: z.string(),
+  agentRationale: z.string(),
+  agentId: z.string(),
+  method: z.enum(["embeddings", "lexical"]),
+  model: z.string(),
+  keywords: z.array(z.string()).default([]),
+  cohesion: z.number().min(0).max(1).nullable().default(null),
+  clusteredAt: z.string(),
+  submissionIds: z.array(z.string()).default([]),
+});
+export type SimilarityCluster = z.infer<typeof similarityClusterSchema>;
+
 export const submissionRecordSchema = z.object({
   id: z.string(),
   hackathonId: z.string(),

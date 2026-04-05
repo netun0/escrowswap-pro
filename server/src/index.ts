@@ -47,6 +47,7 @@ import {
   updateSubmissionStatus,
   upsertPrizeClaim,
 } from "./store.js";
+import { getSubmissionClusters } from "./submissionClusters.js";
 import { getTreasuryWriteContract, treasuryInterface, treasuryProvider } from "./treasuryContract.js";
 
 type StoredSession = {
@@ -282,7 +283,12 @@ app.get("/hackathons/:id", async (req, res) => {
   const submissions = await listSubmissions(req.params.id);
   const approvals = await listApprovalRequests(req.params.id);
   const claims = await listPrizeClaims(req.params.id);
-  res.json({ ...hackathon, submissions, approvals, claims });
+  const similarityClusters = await getSubmissionClusters({
+    hackathonId: hackathon.id,
+    submissions,
+    tracks: hackathon.tracks,
+  });
+  res.json({ ...hackathon, submissions, approvals, claims, similarityClusters });
 });
 
 app.post("/hackathons", async (req, res) => {
